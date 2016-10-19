@@ -6075,7 +6075,6 @@ int main_index(int argc, char** argv) {
     bool allow_negs = false;
     bool compact = false;
     bool dump_alignments = false;
-    bool use_snappy = false;
     int doubling_steps = 3;
     bool verify_index = false;
     bool forward_only = false;
@@ -6207,10 +6206,6 @@ int main_index(int argc, char** argv) {
 
         case 'C':
             compact = true;
-            break;
-
-        case 'Q':
-            use_snappy = true;
             break;
 
         case 't':
@@ -6675,7 +6670,6 @@ int main_index(int argc, char** argv) {
     if (!rocksdb_name.empty()) {
 
         Index index;
-        index.use_snappy = use_snappy;
 
         if (compact) {
             index.open_for_write(rocksdb_name);

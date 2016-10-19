@@ -5,16 +5,17 @@ namespace vg {
 using namespace std;
 
 Index::Index(void) {
-
     start_sep = '\x00';
     end_sep = '\xff';
+
+    // disable write-ahead logging when writing to RocksDB. This is for write durability
+    // in the event of power failure etc. which is not really relevant to our use case.
     write_options = rocksdb::WriteOptions();
-    mem_env = false;
-    use_snappy = false;
+    write_options.disableWAL = true;
+
     // We haven't opened the index yet. We don't get false by default on all platforms.
     is_open = false;
     db = nullptr;
-    //block_cache_size = 1024 * 1024 * 10; // 10MB
     rng.seed(time(NULL));
 
     threads = 1;
@@ -27,65 +28,61 @@ Index::Index(void) {
 }
 
 rocksdb::Options Index::GetOptions(void) {
-
     rocksdb::Options options;
 
-    if (mem_env) {
-        options.env = rocksdb::NewMemEnv(options.env);
-    }
-
     options.create_if_missing = true;
+    // TODO: error_if_exists by default, with override for user who really wishes
+    // to add into an existing index.
+    // options.error_if_exists = true;
     options.max_open_files = -1;
-    options.compression = rocksdb::kSnappyCompression;
-    options.compaction_style = rocksdb::kCompactionStyleLevel;
-    // we are unlikely to reach either of these limits
+    options.allow_mmap_reads = true;
+    options.disableDataSync = true;
+    options.write_buffer_size = (1<<30); // 1GiB memtable budget
+    options.max_write_buffer_number = threads;
+    options.min_write_buffer_number_to_merge = 1;
+    options.allow_concurrent_memtable_write = true;
+    options.enable_write_thread_adaptive_yield = true;
+    options.max_background_flushes = 2;
     options.IncreaseParallelism(threads);
-    options.max_background_flushes = threads;
-    options.max_background_compactions = threads;
 
-    options.num_levels = 2;
-    options.target_file_size_base = (long) 1024 * 1024 * 512; // ~512MB (bigger in practice)
-    options.write_buffer_size = 1024 * 1024 * 256; // ~256MB
-
-    // doesn't work this way
     rocksdb::BlockBasedTableOptions topt;
+    topt.format_version = 2;
+    topt.block_size = 16 * 1024;
     topt.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, true));
-    topt.block_cache = rocksdb::NewLRUCache(512 * 1024 * 1024, 7);
-    topt.no_block_cache = true;
+    // 1GiB block cache; TODO: it might be beneficial to expand this sometimes...
+    topt.block_cache = rocksdb::NewLRUCache(1<<30, 7);
     options.table_factory.reset(NewBlockBasedTableFactory(topt));
     options.table_cache_numshardbits = 7;
-    options.allow_mmap_reads = true;
-    options.allow_mmap_writes = false;
 
-    if (bulk_load) {
-        options.PrepareForBulkLoad();
-        options.max_write_buffer_number = threads;
-        options.max_background_flushes = threads;
-        options.max_background_compactions = threads;
-        options.compaction_style = rocksdb::kCompactionStyleNone;
-        options.memtable_factory.reset(new rocksdb::VectorRepFactory(1000));
-    }
-
-    options.compression_per_level.resize(options.num_levels);
-    for (int i = 0; i < options.num_levels; ++i) {
-        if (i == 0 || use_snappy == true) {
-            options.compression_per_level[i] = rocksdb::kSnappyCompression;
-        } else {
-            options.compression_per_level[i] = rocksdb::kZlibCompression;
-        }
-    }
+    // set up universal compaction with 3 Snappy-compressed levels
+    options.OptimizeUniversalStyleCompaction(1<<30);
+    options.num_levels = 3;
+    options.target_file_size_base = 16 * size_t(1<<30);
+    options.compression_per_level.clear();
+    options.compression = rocksdb::kSnappyCompression;
+    options.access_hint_on_compaction_start = rocksdb::Options::AccessHint::SEQUENTIAL;
+    options.compaction_readahead_size = 16 << 20;
+    options.level0_file_num_compaction_trigger = 5;
+    // disable write throttling because we'll have other logic to let
+    // background compactions converge.
+    options.level0_slowdown_writes_trigger = (1<<30);
+    options.level0_stop_writes_trigger = (1<<30);
+    options.compaction_options_universal.compression_size_percent = -1;
+    // size amplification is not a facttor for our write-once use case
+    options.compaction_options_universal.max_size_amplification_percent = (1<<30);
+    options.compaction_options_universal.size_ratio = 10;
+    options.compaction_options_universal.min_merge_width = 2;
+    options.compaction_options_universal.max_merge_width = 10;
 
     return options;
 }
 
 void Index::open(const std::string& dir, bool read_only) {
-
     name = dir;
     db_options = GetOptions();
 
     rocksdb::Status s;
     if (read_only) {
-        //s = rocksdb::DB::Open(db_options, name, &db);
         s = rocksdb::DB::OpenForReadOnly(db_options, name, &db);
     } else {
         s = rocksdb::DB::Open(db_options, name, &db);
@@ -98,18 +95,14 @@ void Index::open(const std::string& dir, bool read_only) {
 }
 
 void Index::open_read_only(string& dir) {
-    bulk_load = false;
-    //mem_env = true;
     open(dir, true);
 }
 
 void Index::open_for_write(string& dir) {
-    bulk_load = false;
     open(dir, false);
 }
 
 void Index::open_for_bulk_load(string& dir) {
-    bulk_load = true;
     open(dir, false);
 }
 
@@ -122,15 +115,32 @@ Index::~Index(void) {
 void Index::close(void) {
     flush();
     delete db;
+    db = nullptr;
     is_open = false;
 }
 
 void Index::flush(void) {
     db->Flush(rocksdb::FlushOptions());
+
+    // Wait for compactions to converge. Specifically, wait until
+    // there's no more than one background compaction running.
+    // Argument: once that's the case, the number of sorted runs must
+    // already be below level0_file_num_compaction_trigger, or else a
+    // second background compaction would start.
+    uint64_t num_running_compactions = 0;
+    while(true) {
+        num_running_compactions = 0;
+        db->GetIntProperty(rocksdb::DB::Properties::kNumRunningCompactions,
+                           &num_running_compactions);
+        if (num_running_compactions<=1) {
+            break;
+        }
+        sleep(1);
+    }
 }
 
 void Index::compact(void) {
-    db->CompactRange(NULL, NULL);
+    db->CompactRange(rocksdb::CompactRangeOptions(), NULL, NULL);
 }
 
 // todo: replace with union / struct
