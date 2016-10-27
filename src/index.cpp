@@ -831,6 +831,10 @@ void Index::put_mapping(const Mapping& mapping) {
 }
 
 void Index::put_alignment(const Alignment& alignment) {
+    // FIXME: don't just drop 'unmapped reads'
+    if (!alignment.has_path()) {
+        return;
+    }
     string data;
     alignment.SerializeToString(&data);
     db->Put(write_options, key_for_alignment(alignment), data);
