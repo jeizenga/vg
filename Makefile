@@ -19,13 +19,15 @@ CWD:=$(shell pwd)
 
 
 LD_INCLUDE_FLAGS:=-I$(CWD)/$(INC_DIR) -I. -I$(CWD)/$(SRC_DIR) -I$(CWD)/$(UNITTEST_SRC_DIR) -I$(CWD)/$(SUBCOMMAND_SRC_DIR) -I$(CWD)/$(CPP_DIR) -I$(CWD)/$(INC_DIR)/dynamic -I$(CWD)/$(INC_DIR)/sonLib -I$(CWD)/$(INC_DIR)/gcsa
-LD_LIB_FLAGS:= -ggdb -L$(CWD)/$(LIB_DIR) -lvcflib -lgssw -lssw -lprotobuf -lhts -lpthread -ljansson -lncurses -lgcsa2 -lxg -ldivsufsort -ldivsufsort64 -lvcfh -lgfakluge -lraptor2 -lsupbub -lsdsl -lpinchesandcacti -l3edgeconnected -lsonlib -lfml
+LD_LIB_FLAGS:= -L$(CWD)/$(LIB_DIR) -lvcflib -lgssw -lssw -lprotobuf -lhts -lpthread -ljansson -lncurses -lgcsa2 -lxg -ldivsufsort -ldivsufsort64 -lvcfh -lgfakluge -lraptor2 -lsupbub -lsdsl -lpinchesandcacti -l3edgeconnected -lsonlib -lfml
 
 ifeq ($(shell uname -s),Darwin)
 	# We may need libraries from Macports
 	# TODO: where does Homebrew keep libraries?
 	ifeq ($(shell if [ -d /opt/local/lib ];then echo 1;else echo 0;fi), 1)
 	LD_LIB_FLAGS += -L/opt/local/lib
+else
+	CXXFLAGS += -march=native -mtune=native
 endif
 ifeq ($(shell if [ -d /usr/local/lib ];then echo 1;else echo 0;fi), 1)
 	LD_LIB_FLAGS += -L/usr/local/lib
@@ -53,6 +55,7 @@ OBJ =
 OBJ += $(OBJ_DIR)/gssw_aligner.o
 OBJ += $(OBJ_DIR)/vg.o 
 OBJ += $(OBJ_DIR)/index.o
+OBJ += $(OBJ_DIR)/mem.o
 OBJ += $(OBJ_DIR)/mapper.o
 OBJ += $(OBJ_DIR)/region.o
 OBJ += $(OBJ_DIR)/progress_bar.o
@@ -99,6 +102,7 @@ OBJ += $(OBJ_DIR)/graph_synchronizer.o
 OBJ += $(OBJ_DIR)/vg_algorithms.o
 OBJ += $(OBJ_DIR)/nested_traversal_finder.o
 OBJ += $(OBJ_DIR)/option.o
+OBJ += $(OBJ_DIR)/multipath_mapper.o
 OBJ += $(OBJ_DIR)/haplotype_extracter.o
 OBJ += $(OBJ_DIR)/gamsorter.o
 
@@ -123,10 +127,11 @@ UNITTEST_OBJ += $(UNITTEST_OBJ_DIR)/mapping.o
 UNITTEST_OBJ += $(UNITTEST_OBJ_DIR)/alignment.o
 UNITTEST_OBJ += $(UNITTEST_OBJ_DIR)/aligner.o
 UNITTEST_OBJ += $(UNITTEST_OBJ_DIR)/chunker.o
+UNITTEST_OBJ += $(UNITTEST_OBJ_DIR)/xg.o
 UNITTEST_OBJ += $(UNITTEST_OBJ_DIR)/vcf_buffer.o
 UNITTEST_OBJ += $(UNITTEST_OBJ_DIR)/path_index.o
 UNITTEST_OBJ += $(UNITTEST_OBJ_DIR)/vg_algorithms.o
-UNITTEST_OBJ += $(UNITTEST_OBJ_DIR)/xg.o
+UNITTEST_OBJ += $(UNITTEST_OBJ_DIR)/union_find.o
 UNITTEST_OBJ += $(UNITTEST_OBJ_DIR)/variant_adder.o
 
 # These aren't put into libvg, but they provide subcommand implementations for the vg bianry
@@ -149,8 +154,15 @@ SUBCOMMAND_OBJ += $(SUBCOMMAND_OBJ_DIR)/trace_main.o
 SUBCOMMAND_OBJ += $(SUBCOMMAND_OBJ_DIR)/gamsort_main.o
 SUBCOMMAND_OBJ += $(SUBCOMMAND_OBJ_DIR)/msga_main.o
 SUBCOMMAND_OBJ += $(SUBCOMMAND_OBJ_DIR)/map_main.o
+SUBCOMMAND_OBJ += $(SUBCOMMAND_OBJ_DIR)/align_main.o
 SUBCOMMAND_OBJ += $(SUBCOMMAND_OBJ_DIR)/surject_main.o
+SUBCOMMAND_OBJ += $(SUBCOMMAND_OBJ_DIR)/mpmap_main.o
 SUBCOMMAND_OBJ += $(SUBCOMMAND_OBJ_DIR)/find_main.o
+SUBCOMMAND_OBJ += $(SUBCOMMAND_OBJ_DIR)/sim_main.o
+SUBCOMMAND_OBJ += $(SUBCOMMAND_OBJ_DIR)/view_main.o
+SUBCOMMAND_OBJ += $(SUBCOMMAND_OBJ_DIR)/stats_main.o
+SUBCOMMAND_OBJ += $(SUBCOMMAND_OBJ_DIR)/vectorize_main.o
+SUBCOMMAND_OBJ += $(SUBCOMMAND_OBJ_DIR)/filter_main.o
 
 RAPTOR_DIR:=deps/raptor
 PROTOBUF_DIR:=deps/protobuf
@@ -207,6 +219,7 @@ DEPS += $(INC_DIR)/progress_bar.hpp
 
 ifneq ($(shell uname -s),Darwin)
 	DEPS += $(LIB_DIR)/libtcmalloc_minimal.a
+	LD_LIB_FLAGS += -ltcmalloc_minimal
 endif
 
 .PHONY: clean get-deps test set-path static docs .pre-build
@@ -226,6 +239,7 @@ $(LIB_DIR)/libvg.a: $(OBJ) $(DEPS)
 
 get-deps:
 	sudo apt-get install -qq -y protobuf-compiler libprotoc-dev libjansson-dev libbz2-dev libncurses5-dev automake libtool jq samtools curl unzip redland-utils librdf-dev cmake pkg-config wget bc gtk-doc-tools raptor2-utils rasqal-utils bison flex libgoogle-perftools-dev
+
 
 test: $(BIN_DIR)/vg $(LIB_DIR)/libvg.a test/build_graph $(BIN_DIR)/shuf $(BIN_DIR)/xg
 	. ./source_me.sh && cd test && $(MAKE)
@@ -257,7 +271,12 @@ $(LIB_DIR)/libprotobuf.a: .rebuild-protobuf
 test/build_graph: test/build_graph.cpp $(LIB_DIR)/libvg.a $(CPP_DIR)/vg.pb.h $(SRC_DIR)/json2pb.h $(SRC_DIR)/vg.hpp
 	. ./source_me.sh && $(CXX) $(CXXFLAGS) -o test/build_graph test/build_graph.cpp $(LD_INCLUDE_FLAGS) -lvg $(LD_LIB_FLAGS) $(ROCKSDB_LDFLAGS)
 
-$(LIB_DIR)/libtcmalloc_minimal.a:
+# remove annoying large alloc messages from tcmalloc
+$(GPERF_DIR)/src/tcmalloc.cc.bak:
+	cp $(GPERF_DIR)/src/tcmalloc.cc $(GPERF_DIR)/src/tcmalloc.cc.bak
+	sed 's/printer.printf("tcmalloc: large alloc/return; printer.printf("tcmalloc: large alloc/' $(GPERF_DIR)/src/tcmalloc.cc.bak >$(GPERF_DIR)/src/tcmalloc.cc
+
+$(LIB_DIR)/libtcmalloc_minimal.a: $(GPERF_DIR)/src/tcmalloc.cc.bak
 	+. ./source_me.sh && cd $(GPERF_DIR) && ./autogen.sh && ./configure --prefix=`pwd` && $(MAKE) && $(MAKE) install && cp -r lib/* $(CWD)/$(LIB_DIR)/ && cp -r bin/* $(CWD)/$(BIN_DIR)/ && cp -r include/* $(CWD)/$(INC_DIR)/
 
 $(LIB_DIR)/libsdsl.a: $(SDSL_DIR)/lib/*.cpp $(SDSL_DIR)/include/sdsl/*.hpp
@@ -375,9 +394,11 @@ $(OBJ_DIR)/ssw_aligner.o: $(SRC_DIR)/ssw_aligner.cpp $(SRC_DIR)/ssw_aligner.hpp 
 
 $(OBJ_DIR)/vg_set.o: $(SRC_DIR)/vg_set.cpp $(SRC_DIR)/vg_set.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/progressive.hpp $(SRC_DIR)/index.hpp $(DEPS)
 
-$(OBJ_DIR)/mapper.o: $(SRC_DIR)/mapper.cpp $(SRC_DIR)/mapper.hpp $(SRC_DIR)/vg.hpp $(DEPS)
+$(OBJ_DIR)/mapper.o: $(SRC_DIR)/mapper.cpp $(SRC_DIR)/mapper.hpp $(SRC_DIR)/mem.hpp $(SRC_DIR)/vg.hpp $(DEPS)
 
-$(OBJ_DIR)/main.o: $(SRC_DIR)/main.cpp $(INC_DIR)/stream.hpp $(DEPS) $(SRC_DIR)/utility.hpp $(INC_DIR)/globalDefs.hpp $(SRC_DIR)/bubbles.hpp $(SRC_DIR)/genotyper.hpp $(SRC_DIR)/distributions.hpp $(SRC_DIR)/readfilter.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/progressive.hpp $(SRC_DIR)/index.hpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp
+$(OBJ_DIR)/mem.o: $(SRC_DIR)/mem.cpp $(SRC_DIR)/mem.hpp $(SRC_DIR)/vg.hpp $(DEPS)
+
+$(OBJ_DIR)/main.o: $(SRC_DIR)/main.cpp $(INC_DIR)/stream.hpp $(DEPS) $(SRC_DIR)/utility.hpp $(INC_DIR)/globalDefs.hpp $(SRC_DIR)/bubbles.hpp $(SRC_DIR)/genotyper.hpp $(SRC_DIR)/readfilter.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/progressive.hpp $(SRC_DIR)/index.hpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp
 
 $(OBJ_DIR)/region.o: $(SRC_DIR)/region.cpp $(SRC_DIR)/region.hpp $(DEPS)
 
@@ -472,6 +493,8 @@ $(OBJ_DIR)/nested_traversal_finder.o: $(SRC_DIR)/nested_traversal_finder.cpp $(S
 
 $(OBJ_DIR)/option.o: $(SRC_DIR)/option.cpp $(SRC_DIR)/option.hpp $(DEPS)
 
+$(OBJ_DIR)/multipath_mapper.o: $(SRC_DIR)/multipath_mapper.cpp $(SRC_DIR)/multipath_mapper.hpp $(SRC_DIR)/mapper.hpp $(SRC_DIR)/mem.hpp $(DEPS)
+
 $(OBJ_DIR)/haplotype_extracter.o: $(SRC_DIR)/haplotype_extracter.cpp $(SRC_DIR)/haplotype_extracter.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/json2pb.h $(LIB_DIR)/libprotobuf.a $(LIB_DIR)/libxg.a $(CPP_DIR)/vg.pb.h
 	+$(CXX) $(CXXFLAGS) -c -o $@ $< $(LD_INCLUDE_FLAGS) $(LD_LIB_FLAGS)
 
@@ -499,7 +522,7 @@ $(UNITTEST_OBJ_DIR)/genotypekit.o: $(UNITTEST_SRC_DIR)/genotypekit.cpp $(UNITTES
 
 $(UNITTEST_OBJ_DIR)/readfilter.o: $(UNITTEST_SRC_DIR)/readfilter.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(SRC_DIR)/readfilter.hpp $(DEPS)
 
-$(UNITTEST_OBJ_DIR)/multipath_alignment.o: $(UNITTEST_SRC_DIR)/multipath_alignment.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(SRC_DIR)/multipath_alignment.hpp $(SRC_DIR)/multipath_alignment.cpp $(SRC_DIR)/mapper.hpp $(DEPS)
+$(UNITTEST_OBJ_DIR)/multipath_alignment.o: $(UNITTEST_SRC_DIR)/multipath_alignment.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(SRC_DIR)/multipath_alignment.hpp $(SRC_DIR)/multipath_alignment.cpp $(SRC_DIR)/mapper.hpp $(SRC_DIR)/mem.hpp $(DEPS)
 
 $(UNITTEST_OBJ_DIR)/phased_genome.o: $(UNITTEST_SRC_DIR)/phased_genome.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(SRC_DIR)/phased_genome.hpp $(SRC_DIR)/phased_genome.cpp $(SRC_DIR)/snarls.hpp $(DEPS)
 
@@ -524,15 +547,15 @@ $(UNITTEST_OBJ_DIR)/snarls.o: $(UNITTEST_SRC_DIR)/snarls.cpp $(UNITTEST_SRC_DIR)
 
 $(UNITTEST_OBJ_DIR)/chunker.o: $(UNITTEST_SRC_DIR)/chunker.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(SRC_DIR)/chunker.hpp $(DEPS)
 
-$(UNITTEST_OBJ_DIR)/vcf_buffer.o: $(UNITTEST_SRC_DIR)/vcf_buffer.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(SRC_DIR)/vcf_buffer.hpp $(DEPS)
+$(UNITTEST_OBJ_DIR)/xg.o: $(UNITTEST_SRC_DIR)/xg.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(DEPS)
 
-$(UNITTEST_OBJ_DIR)/path_index.o: $(UNITTEST_SRC_DIR)/path_index.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(SRC_DIR)/path_index.hpp $(DEPS)
+$(UNITTEST_OBJ_DIR)/vcf_buffer.o: $(UNITTEST_SRC_DIR)/vcf_buffer.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(SRC_DIR)/vcf_buffer.hpp $(DEPS)
 
 $(UNITTEST_OBJ_DIR)/path_index.o: $(UNITTEST_SRC_DIR)/path_index.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(SRC_DIR)/path_index.hpp $(DEPS)
 
 $(UNITTEST_OBJ_DIR)/vg_algorithms.o: $(UNITTEST_SRC_DIR)/vg_algorithms.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(ALGORITHMS_SRC_DIR)/vg_algorithms.hpp $(ALGORITHMS_SRC_DIR)/vg_algorithms.cpp $(DEPS)
 
-$(UNITTEST_OBJ_DIR)/xg.o: $(UNITTEST_SRC_DIR)/xg.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(DEPS)
+$(UNITTEST_OBJ_DIR)/union_find.o: $(UNITTEST_SRC_DIR)/union_find.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(SRC_DIR)/utility.hpp $(DEPS)
 
 $(UNITTEST_OBJ_DIR)/variant_adder.o: $(UNITTEST_SRC_DIR)/variant_adder.cpp $(UNITTEST_SRC_DIR)/catch.hpp $(SRC_DIR)/variant_adder.hpp $(SRC_DIR)/utility.hpp $(SRC_DIR)/name_mapper.hpp $(DEPS)
 
@@ -546,7 +569,7 @@ $(SUBCOMMAND_OBJ_DIR)/construct_main.o: $(SUBCOMMAND_SRC_DIR)/construct_main.cpp
 
 $(SUBCOMMAND_OBJ_DIR)/simplify_main.o: $(SUBCOMMAND_SRC_DIR)/simplify_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/simplifier.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/progressive.hpp $(SRC_DIR)/utility.hpp $(SRC_DIR)/feature_set.hpp $(SRC_DIR)/path.hpp $(SRC_DIR)/path_index.hpp $(DEPS)
 
-$(SUBCOMMAND_OBJ_DIR)/homogenize_main.o: $(SUBCOMMAND_SRC_DIR)/homogenize_main.cpp $(OBJ_DIR)/homogenizer.o $(OBJ_DIR)/filter.o $(OBJ_DIR)/mapper.hpp $(OBJ_DIR)/bubbles.o $(OBJ_DIR)/vg.o $(DEPS)
+$(SUBCOMMAND_OBJ_DIR)/homogenize_main.o: $(SUBCOMMAND_SRC_DIR)/homogenize_main.cpp $(OBJ_DIR)/homogenizer.o $(OBJ_DIR)/filter.o $(OBJ_DIR)/mapper.hpp $(SRC_DIR)/mem.hpp $(OBJ_DIR)/bubbles.o $(OBJ_DIR)/vg.o $(DEPS)
 
 $(SUBCOMMAND_OBJ_DIR)/sift_main.o: $(SUBCOMMAND_SRC_DIR)/sift_main.cpp $(OBJ_DIR)/filter.o $(OBJ_DIR)/vg.o $(DEPS)
 
@@ -573,13 +596,27 @@ $(SUBCOMMAND_OBJ_DIR)/call_main.o: $(SUBCOMMAND_SRC_DIR)/call_main.cpp $(SUBCOMM
 
 $(SUBCOMMAND_OBJ_DIR)/genotype_main.o: $(SUBCOMMAND_SRC_DIR)/genotype_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(SRC_DIR)/genotyper.hpp $(SRC_DIR)/genotyper.cpp $(SRC_DIR)/snarls.hpp $(SRC_DIR)/path_index.hpp $(DEPS)
 
-$(SUBCOMMAND_OBJ_DIR)/msga_main.o: $(SUBCOMMAND_SRC_DIR)/msga_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(SRC_DIR)/mapper.hpp $(DEPS)
+$(SUBCOMMAND_OBJ_DIR)/msga_main.o: $(SUBCOMMAND_SRC_DIR)/msga_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(SRC_DIR)/mapper.hpp $(SRC_DIR)/mem.hpp $(DEPS)
 
-$(SUBCOMMAND_OBJ_DIR)/map_main.o: $(SUBCOMMAND_SRC_DIR)/map_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(SRC_DIR)/mapper.hpp $(DEPS)
+$(SUBCOMMAND_OBJ_DIR)/map_main.o: $(SUBCOMMAND_SRC_DIR)/map_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(SRC_DIR)/mapper.hpp $(SRC_DIR)/mem.hpp $(DEPS)
+
+$(SUBCOMMAND_OBJ_DIR)/mpmap_main.o: $(SUBCOMMAND_SRC_DIR)/mpmap_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(SRC_DIR)/multipath_mapper.hpp $(SRC_DIR)/mem.hpp $(DEPS)
+
+$(SUBCOMMAND_OBJ_DIR)/align_main.o: $(SUBCOMMAND_SRC_DIR)/align_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(SRC_DIR)/gssw_aligner.hpp $(DEPS)
 
 $(SUBCOMMAND_OBJ_DIR)/surject_main.o: $(SUBCOMMAND_SRC_DIR)/surject_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(SRC_DIR)/mapper.hpp $(DEPS)
 
 $(SUBCOMMAND_OBJ_DIR)/find_main.o: $(SUBCOMMAND_SRC_DIR)/find_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(DEPS)
+
+$(SUBCOMMAND_OBJ_DIR)/sim_main.o: $(SUBCOMMAND_SRC_DIR)/sim_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(SRC_DIR)/mapper.hpp $(SRC_DIR)/sampler.hpp $(DEPS)
+
+$(SUBCOMMAND_OBJ_DIR)/view_main.o: $(SUBCOMMAND_SRC_DIR)/view_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(DEPS)
+
+$(SUBCOMMAND_OBJ_DIR)/stats_main.o: $(SUBCOMMAND_SRC_DIR)/stats_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(DEPS)
+
+$(SUBCOMMAND_OBJ_DIR)/vectorize_main.o: $(SUBCOMMAND_SRC_DIR)/vectorize_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(SRC_DIR)/vectorizer.hpp $(SRC_DIR)/mapper.hpp $(DEPS)
+
+$(SUBCOMMAND_OBJ_DIR)/filter_main.o: $(SUBCOMMAND_SRC_DIR)/filter_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/stream.hpp $(SRC_DIR)/readfilter.hpp $(DEPS)
 
 
 ########################
@@ -588,15 +625,15 @@ $(SUBCOMMAND_OBJ_DIR)/find_main.o: $(SUBCOMMAND_SRC_DIR)/find_main.cpp $(SUBCOMM
 
 # Define a default rule for building objects from CPP files
 $(OBJ_DIR)/%.o : $(SRC_DIR)/%.cpp
-	. ./source_me.sh && $(CXX) $(CXXFLAGS) -c -o $@ $< $(LD_INCLUDE_FLAGS) $(LD_LIB_FLAGS) $(ROCKSDB_LDFLAGS)
+	. ./source_me.sh && $(CXX) $(CXXFLAGS) -c -o $@ $< $(LD_INCLUDE_FLAGS)
 $(SUBCOMMAND_OBJ_DIR)/%.o : $(SUBCOMMAND_DIR)/%.cpp
-	. ./source_me.sh && $(CXX) $(CXXFLAGS) -c -o $@ $< $(LD_INCLUDE_FLAGS) $(LD_LIB_FLAGS) $(ROCKSDB_LDFLAGS)
+	. ./source_me.sh && $(CXX) $(CXXFLAGS) -c -o $@ $< $(LD_INCLUDE_FLAGS)
 $(UNITTEST_OBJ_DIR)/%.o : $(UNITTEST_SRC_DIR)/%.cpp
-	. ./source_me.sh && $(CXX) $(CXXFLAGS) -c -o $@ $< $(LD_INCLUDE_FLAGS) $(LD_LIB_FLAGS) $(ROCKSDB_LDFLAGS)
+	. ./source_me.sh && $(CXX) $(CXXFLAGS) -c -o $@ $< $(LD_INCLUDE_FLAGS)
         
 # Protobuf stuff builds into its same directory
 $(CPP_DIR)/%.o : $(CPP_DIR)/%.cc
-	. ./source_me.sh && $(CXX) $(CXXFLAGS) -c -o $@ $< $(LD_INCLUDE_FLAGS) $(LD_LIB_FLAGS) $(ROCKSDB_LDFLAGS)
+	. ./source_me.sh && $(CXX) $(CXXFLAGS) -c -o $@ $< $(LD_INCLUDE_FLAGS)
 
 $(SUBCOMMAND_OBJ_DIR)/trace_main.o: $(SUBCOMMAND_SRC_DIR)/trace_main.cpp $(SUBCOMMAND_SRC_DIR)/subcommand.hpp $(SRC_DIR)/vg.hpp $(SRC_DIR)/haplotype_extracter.hpp $(DEPS)
 	+$(CXX) $(CXXFLAGS) -c -o $@ $< $(LD_INCLUDE_FLAGS) $(LD_LIB_FLAGS) $(ROCKSDB_LDFLAGS)

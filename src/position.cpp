@@ -106,6 +106,28 @@ vector<Edge> xg_cached_edges_of(id_t id, xg::XG* xgidx, LRUCache<id_t, vector<Ed
     }
     return cached.first;
 }
+    
+vector<Edge> xg_cached_edges_on_start(id_t id, xg::XG* xgidx, LRUCache<id_t, vector<Edge> >& edge_cache) {
+    vector<Edge> all_edges = xg_cached_edges_of(id, xgidx, edge_cache);
+    auto new_end = std::remove_if(all_edges.begin(), all_edges.end(),
+                                  [&](const Edge& edge) {
+                                      return (edge.from() == id && edge.from_start()) ||
+                                             (edge.to() == id && !edge.to_end());
+                                  });
+    all_edges.resize(new_end - all_edges.begin());
+    return all_edges;
+}
+
+vector<Edge> xg_cached_edges_on_end(id_t id, xg::XG* xgidx, LRUCache<id_t, vector<Edge> >& edge_cache) {
+    vector<Edge> all_edges = xg_cached_edges_of(id, xgidx, edge_cache);
+    auto new_end = std::remove_if(all_edges.begin(), all_edges.end(),
+                                  [&](const Edge& edge) {
+                                      return (edge.from() == id && !edge.from_start()) ||
+                                             (edge.to() == id && edge.to_end());
+                                  });
+    all_edges.resize(new_end - all_edges.begin());
+    return all_edges;
+}
 
 string xg_cached_node_sequence(id_t id, xg::XG* xgidx, LRUCache<id_t, Node>& node_cache) {
     pair<Node, bool> cached = node_cache.retrieve(id);
@@ -127,10 +149,10 @@ size_t xg_cached_node_length(id_t id, xg::XG* xgidx, LRUCache<id_t, Node>& node_
     return node.sequence().size();
 }
 
-size_t xg_cached_node_start(id_t id, xg::XG* xgidx, LRUCache<id_t, size_t>& node_start_cache) {
-    pair<size_t, bool> cached = node_start_cache.retrieve(id);
+int64_t xg_cached_node_start(id_t id, xg::XG* xgidx, LRUCache<id_t, int64_t>& node_start_cache) {
+    pair<int64_t, bool> cached = node_start_cache.retrieve(id);
     if(!cached.second) {
-        cached.first = xgidx->node_start(id);
+        cached.first = (int64_t)xgidx->node_start(id);
         node_start_cache.put(id, cached.first);
     }
     return cached.first;
