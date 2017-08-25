@@ -14,6 +14,7 @@
 #include "../alignment.hpp"
 #include "../multipath_mapper.hpp"
 #include "../gssw_aligner.hpp"
+#include "../mem.hpp"
 
 //#define debug_mpmap
 
@@ -26,7 +27,7 @@ void help_mpmap(char** argv) {
     << "usage: " << argv[0] << " mpmap [options] -x index.xg -g index.gcsa [-f reads1.fq [-f reads2.fq] | -b reads.bam | -G reads.gam] > aln.gamp" << endl
     << "Multipath align reads to a graph." << endl
     << endl
-    << "options:" << endl
+    << "basic options:" << endl
     << "graph/index:" << endl
     << "  -x, --xg-name FILE        use this xg index (required)" << endl
     << "  -g, --gcsa-name FILE      use this GCSA2/LCP index pair (required; both FILE and FILE.lcp)" << endl
@@ -38,18 +39,25 @@ void help_mpmap(char** argv) {
     << "algorithm:" << endl
     << "  -S, --single-path-mode    produce single-path alignments (.gam) instead of multipath alignments (.gamp) (ignores -sua)" << endl
     << "  -s, --snarls FILE         align to alternate paths in these snarls" << endl
-    << "  -u, --snarl-max-cut INT   do not align to alternate paths in a snarl if an exact match is at least this long (0 for no limit) [5]" << endl
+    << "scoring:" << endl
+    << "  -A, --no-qual-adjust      do not perform base quality adjusted alignments (required if input does not have base qualities)" << endl
+    << endl
+    << "advanced options:" << endl
+    << "algorithm:" << endl
+    << "  -U, --snarl-max-cut INT   do not align to alternate paths in a snarl if an exact match is at least this long (0 for no limit) [5]" << endl
     << "  -a, --alt-paths INT       align to (up to) this many alternate paths in between MEMs or in snarls [4]" << endl
     << "  -v, --mq-method OPT       mapping quality method: 0 - none, 1 - fast approximation, 2 - exact [1]" << endl
     << "  -Q, --mq-max OPT          cap mapping quality estimates at this much [60]" << endl
     << "  -p, --band-padding INT    pad dynamic programming bands in inter-MEM alignment by this much [2]" << endl
+    << "  -u, --map-attempts INT    perform (up to) this many mappings per read (0 for no limit) [32]" << endl
     << "  -M, --max-multimaps INT   report (up to) this many mappings per read [1]" << endl
-    << "  -r, --reseed-length INT   reseed SMEMs for contained exact matches if they are at least this long (0 for no reseeding) [32]" << endl
-    << "  -W, --reseed-diff INT     require contained exact matches to have length within this much of the SMEM [8]" << endl
+    << "  -r, --reseed-length INT   reseed SMEMs for internal MEMs if they are at least this long (0 for no reseeding) [32]" << endl
+    << "  -W, --reseed-diff INT     require internal MEMs to have length within tåhis much of the SMEM's length [8]" << endl
     << "  -k, --min-mem-length INT  minimum MEM length to anchor multipath alignments [1]" << endl
     << "  -c, --hit-max INT         ignore MEMs that occur greater than this many times in the graph (0 for no limit) [128]" << endl
     << "  -d, --max-dist-error INT  maximum typical deviation between distance on a reference path and distance in graph [8]" << endl
-    << "  -C, --drop-cluster FLOAT  drop MEM clusters that cover this fraction less of the read than the largest cluster [0.5]" << endl
+    << "  -w, --approx-exp FLOAT    let the approximate likelihood miscalculate likelihood ratios by this power [4.0]" << endl
+    << "  -C, --drop-subgraph FLOAT drop alignment subgraphs whose MEMs cover this fraction less of the read than the best subgraph [0.5]" << endl
     << "  -R, --prune-ratio FLOAT   prune MEM anchors if their approximate likelihood is this ratio less than the optimal anchors [10000.0]" << endl
     << "scoring:" << endl
     << "  -q, --match INT           use this match score [1]" << endl
@@ -58,7 +66,6 @@ void help_mpmap(char** argv) {
     << "  -y, --gap-extend INT      use this gap extension penalty [1]" << endl
     << "  -L, --full-l-bonus INT    add this score to alignments that use the full length of the read [5]" << endl
     << "  -m, --remove-bonuses      remove full length alignment bonuses in reported scores" << endl
-    << "  -A, --no-qual-adjust      do not perform base quality adjusted alignments" << endl
     << "computational parameters:" << endl
     << "  -t, --threads INT         number of compute threads to use" << endl
     << "  -Z, --buffer-size INT     buffer this many alignments together (per compute thread) before outputting to stdout [100]" << endl;
@@ -87,6 +94,7 @@ int main_mpmap(int argc, char** argv) {
     int full_length_bonus = 5;
     bool interleaved_input = false;
     int snarl_cut_size = 5;
+    int max_map_attempts = 32;
     int max_num_mappings = 1;
     int buffer_size = 100;
     int hit_max = 128;
@@ -101,6 +109,7 @@ int main_mpmap(int argc, char** argv) {
     int max_dist_error = 8;
     int num_alt_alns = 4;
     double suboptimal_path_ratio = 10000.0;
+    double likelihood_approx_exp = 4.0;
     bool single_path_alignment_mode = false;
     int max_mapq = 60;
     
@@ -118,18 +127,20 @@ int main_mpmap(int argc, char** argv) {
             {"gam-input", required_argument, 0, 'G'},
             {"single-path-mode", no_argument, 0, 'S'},
             {"snarls", required_argument, 0, 's'},
-            {"snarl-max-cut", required_argument, 0, 'u'},
+            {"snarl-max-cut", required_argument, 0, 'U'},
             {"alt-paths", required_argument, 0, 'a'},
             {"mq-method", required_argument, 0, 'v'},
             {"mq-max", required_argument, 0, 'Q'},
             {"band-padding", required_argument, 0, 'p'},
+            {"map-attempts", required_argument, 0, 'u'},
             {"max-multimaps", required_argument, 0, 'M'},
             {"reseed-length", required_argument, 0, 'r'},
             {"reseed-diff", required_argument, 0, 'W'},
             {"min-mem-length", required_argument, 0, 'k'},
             {"hit-max", required_argument, 0, 'c'},
             {"max-dist-error", required_argument, 0, 'd'},
-            {"drop-cluster", required_argument, 0, 'C'},
+            {"approx-exp", required_argument, 0, 'w'},
+            {"drop-subgraph", required_argument, 0, 'C'},
             {"prune-ratio", required_argument, 0, 'R'},
             {"match", required_argument, 0, 'q'},
             {"mismatch", required_argument, 0, 'z'},
@@ -144,7 +155,7 @@ int main_mpmap(int argc, char** argv) {
         };
 
         int option_index = 0;
-        c = getopt_long (argc, argv, "hx:g:b:f:iG:Ss:u:a:v:Q:p:M:r:W:k:c:d:C:R:q:z:o:y:L:mAt:Z:",
+        c = getopt_long (argc, argv, "hx:g:b:f:iG:Ss:u:a:v:Q:p:M:r:W:k:c:d:w:C:R:q:z:o:y:L:mAt:Z:",
                          long_options, &option_index);
 
 
@@ -223,7 +234,7 @@ int main_mpmap(int argc, char** argv) {
                 }
                 break;
                 
-            case 'u':
+            case 'U':
                 snarl_cut_size = atoi(optarg);
                 break;
                 
@@ -258,6 +269,10 @@ int main_mpmap(int argc, char** argv) {
                 band_padding = atoi(optarg);
                 break;
                 
+            case 'u':
+                max_map_attempts = atoi(optarg);
+                break;
+                
             case 'M':
                 max_num_mappings = atoi(optarg);
                 break;
@@ -280,6 +295,10 @@ int main_mpmap(int argc, char** argv) {
                 
             case 'd':
                 max_dist_error = atoi(optarg);
+                break;
+                
+            case 'w':
+                likelihood_approx_exp = atof(optarg);
                 break;
                 
             case 'C':
@@ -350,7 +369,7 @@ int main_mpmap(int argc, char** argv) {
     }
     
     if (snarl_cut_size < 0) {
-        cerr << "error:[vg mpmap] Max snarl cut size (-u) set to " << snarl_cut_size << ", must set to a positive integer or 0 for no maximum." << endl;
+        cerr << "error:[vg mpmap] Max snarl cut size (-U) set to " << snarl_cut_size << ", must set to a positive integer or 0 for no maximum." << endl;
         exit(1);
     }
     
@@ -362,6 +381,15 @@ int main_mpmap(int argc, char** argv) {
     if (band_padding < 0) {
         cerr << "error:[vg mpmap] Band padding (-p) set to " << band_padding << ", must set to a nonnegative integer." << endl;
         exit(1);
+    }
+    
+    if (max_map_attempts < 0) {
+        cerr << "error:[vg mpmap] Maximum number of mapping attempts (-u) set to " << max_map_attempts << ", must set to a positive integer or 0 for no maximum." << endl;
+        exit(1);
+    }
+    
+    if (max_num_mappings > max_map_attempts && max_map_attempts != 0) {
+        cerr << "warning:[vg mpmap] Reporting up to " << max_num_mappings << " mappings, but only computing up to " << max_map_attempts << " mappings." << endl;
     }
     
     if (max_num_mappings <= 0) {
@@ -386,6 +414,11 @@ int main_mpmap(int argc, char** argv) {
     
     if (max_dist_error < 0) {
         cerr << "error:[vg mpmap] Maximum distance approximation error (-d) set to " << max_dist_error << ", must set to a nonnegative integer." << endl;
+        exit(1);
+    }
+    
+    if (likelihood_approx_exp < 1.0) {
+        cerr << "error:[vg mpmap] Likelihood approximation exponent (-w) set to " << likelihood_approx_exp << ", must set to at least 1.0." << endl;
         exit(1);
     }
     
@@ -512,6 +545,8 @@ int main_mpmap(int argc, char** argv) {
     multipath_mapper.max_expected_dist_approx_error = max_dist_error;
     multipath_mapper.max_snarl_cut_size = snarl_cut_size;
     multipath_mapper.num_alt_alns = num_alt_alns;
+    multipath_mapper.num_mapping_attempts = max_map_attempts ? max_map_attempts : numeric_limits<int>::max();
+    multipath_mapper.log_likelihood_approx_factor = likelihood_approx_exp;
     multipath_mapper.set_suboptimal_path_likelihood_ratio(suboptimal_path_ratio); // note: do this after choosing whether qual adj alignments
     
     int thread_count = get_thread_count();
@@ -596,6 +631,9 @@ int main_mpmap(int argc, char** argv) {
         stream::write_buffered(cout, multipath_buffer, 0);
     }
     cout.flush();
+    
+    //cerr << "MEM cluster filtering efficiency: " << ((double) OrientedDistanceClusterer::PRUNE_COUNTER) / OrientedDistanceClusterer::CLUSTER_TOTAL << " (" << OrientedDistanceClusterer::PRUNE_COUNTER << "/" << OrientedDistanceClusterer::CLUSTER_TOTAL << ")" << endl;
+    //cerr << "subgraph filtering efficiency: " << ((double) MultipathMapper::PRUNE_COUNTER) / MultipathMapper::SUBGRAPH_TOTAL << " (" << MultipathMapper::PRUNE_COUNTER << "/" << MultipathMapper::SUBGRAPH_TOTAL << ")" << endl;
     
     delete snarl_manager;
     

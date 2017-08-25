@@ -16,6 +16,7 @@ import timeout_decorator
 import urllib2
 import shutil
 import glob
+import traceback
 
 import tsv
 
@@ -41,7 +42,8 @@ class VGCITest(TestCase):
         self.tempdir = tempfile.mkdtemp()
         
         self.f1_threshold = 0.005
-        self.auc_threshold = 0.02
+        self.acc_threshold = 0.02
+        self.auc_threshold = 0.05
         # What (additional) portion of reads are allowed to get worse scores
         # when moving to a more inclusive reference?
         self.worse_threshold = 0.005
@@ -125,8 +127,16 @@ class VGCITest(TestCase):
             # Convert to a public HTTPS URL
             url = 'https://{}.s3.amazonaws.com{}'.format(bname, keyname)
             # And download it
-            connection = urllib2.urlopen(url)
-            return connection.read()
+            try:
+                connection = urllib2.urlopen(url)
+                return connection.read()
+            except urllib2.HTTPError as e:
+                if e.code == 404:
+                    # Baseline file doesn't yet exist. Give an empty string.
+                    return ""
+                else:
+                    # Something else is wrong
+                    raise
         else:
             # Assume it's a raw path.
             with open(os.path.join(self.baseline, 'outstore-{}'.format(tag), path)) as f:
@@ -390,7 +400,8 @@ class VGCITest(TestCase):
             self._verify_f1('NA12878', tag)
 
     def _mapeval_vg_run(self, reads, base_xg_path, sim_xg_paths, fasta_path,
-                        test_index_bases, test_names, score_baseline_name, tag):
+                        test_index_bases, test_names, score_baseline_name,
+                        multipath, tag):
         """ Wrap toil-vg mapeval. 
         
         Evaluates realignments (to the linear reference and to a set of graphs)
@@ -468,8 +479,8 @@ class VGCITest(TestCase):
         # things as file IDs?
         mapeval_options = get_default_mapeval_options(os.path.join(out_store, 'true.pos'))
         mapeval_options.bwa = True
-        mapeval_options.bwa_paired = True
-        mapeval_options.vg_paired = True
+        mapeval_options.bwa_paired = not multipath
+        mapeval_options.vg_paired = not multipath
         mapeval_options.fasta = make_url(fasta_path)
         mapeval_options.index_bases = [make_url(x) for x in test_index_bases]
         mapeval_options.gam_names = test_names
@@ -477,6 +488,7 @@ class VGCITest(TestCase):
         if score_baseline_name is not None:
             mapeval_options.compare_gam_scores = score_baseline_name
         mapeval_options.multipath = True
+
         
         # Make Toil
         with context.get_toil(job_store) as toil:
@@ -673,7 +685,7 @@ class VGCITest(TestCase):
         baseline_dict = self._tsv_to_dict(baseline_tsv)
 
         # print out a table of mapeval results
-        table_name = 'mape eval results'
+        table_name = 'map eval results'
         if positive_control:
             table_name += ' (*: positive control)'
         if negative_control:
@@ -691,17 +703,18 @@ class VGCITest(TestCase):
                 method += '*'
             if negative_control and key in [negative_control, negative_control + '-pe']:
                 method += '**'
-            print '\t'.join(str(x) for x in [method, sval[1], bval[1],
-                                             sval[2], bval[2], self.auc_threshold])
+            def r4(s):
+                return round(s, 4) if isinstance(s, float) else s                
+            print '\t'.join(str(r4(x)) for x in [method, sval[1], bval[1],
+                                                 sval[2], bval[2], self.auc_threshold])
         self._end_message()
 
         # test the mapeval results, only looking at baseline keys
         for key, val in baseline_dict.iteritems():
             if key in stats_dict:
                 self.assertTrue(stats_dict[key][0] == reads)
-                self.assertTrue(stats_dict[key][1] >= val[1] - self.auc_threshold)
-                # disable roc test for now
-                #self.assertTrue(stats_dict[key][2] >= val[2] - self.auc_threshold)
+                self.assertTrue(stats_dict[key][1] >= val[1] - self.acc_threshold)
+                self.assertTrue(stats_dict[key][2] >= val[2] - self.auc_threshold)
             else:
                 log.warning('Key {} from baseline not found in stats'.format(key))
             
@@ -786,7 +799,7 @@ class VGCITest(TestCase):
                         assert score_stats_dict[key][1] <= baseline_dict[key][1] + self.worse_threshold
             
     def _test_mapeval(self, reads, region, baseline_graph, test_graphs, score_baseline_graph=None,
-                      positive_control=None, negative_control=None, sample=None):
+                      positive_control=None, negative_control=None, sample=None, multipath=False):
         """ Run simulation on a bakeoff graph
         
         Simulate the given number of reads from the given baseline_graph
@@ -841,7 +854,7 @@ class VGCITest(TestCase):
             test_index_bases.append(os.path.join(self._outstore(tag), test_tag))
         test_xg_paths = os.path.join(self._outstore(tag), tag + '.xg')
         self._mapeval_vg_run(reads, xg_path, sim_xg_paths, fasta_path, test_index_bases,
-                             test_graphs, score_baseline_graph, tag)
+                             test_graphs, score_baseline_graph, multipath, tag)
         if self.verify:
             self._verify_mapeval(reads, baseline_graph, score_baseline_graph,
                                  positive_control, negative_control, tag)
@@ -849,23 +862,23 @@ class VGCITest(TestCase):
     @timeout_decorator.timeout(7200)
     def test_sim_brca1_snp1kg(self):
         """ Mapping and calling bakeoff F1 test for BRCA1 primary graph """
-        # Using 50k simulated reads from snp1kg BRCA1, realign against all these
-        # other BRCA1 graphs and make sure the realignments are sufficiently
-        # good.
-        # Compare all realignment scores agaisnt the scores for the primary
-        # graph.
+        # Using 100k simulated reads from snp1kg BRCA1, realign against all
+        # these other BRCA1 graphs and make sure the realignments are
+        # sufficiently good. Compare all realignment scores agaisnt the scores
+        # for the primary graph.
         self._test_mapeval(100000, 'BRCA1', 'snp1kg',
-                           ['primary', 'snp1kg', 'cactus', 'snp1kg_HG00096', 'snp1kg_minus_HG00096'],
+                           ['primary', 'snp1kg', 'common1kg', 'cactus', 'snp1kg_HG00096', 'snp1kg_minus_HG00096'],
                            score_baseline_graph='primary',
                            positive_control='snp1kg_HG00096',
                            negative_control='snp1kg_minus_HG00096',
                            sample='HG00096')
 
     @timeout_decorator.timeout(7200)
+
     def test_sim_mhc_snp1kg(self):
         """ Mapping and calling bakeoff F1 test for MHC primary graph """        
         self._test_mapeval(100000, 'MHC', 'snp1kg',
-                           ['primary', 'snp1kg', 'cactus', 'snp1kg_HG00096', 'snp1kg_minus_HG00096'],
+                           ['primary', 'snp1kg', 'common1kg', 'cactus', 'snp1kg_HG00096', 'snp1kg_minus_HG00096'],
                            score_baseline_graph='primary',
                            positive_control='snp1kg_HG00096',
                            negative_control='snp1kg_minus_HG00096',

@@ -84,6 +84,7 @@ namespace vg {
                 Path* opt_path = aln_out->mutable_path();
                 *opt_path = *(*iter);
                 iter++;
+                int next_rank = opt_path->mapping_size() + 1;
                 for (; iter != optimal_path_chunks.rend(); iter++) {
                     Mapping* curr_end_mapping = opt_path->mutable_mapping(opt_path->mapping_size() - 1);
                     
@@ -91,18 +92,42 @@ namespace vg {
                     const Path& next_path = *(*iter);
                     const Mapping& next_start_mapping = next_path.mapping(0);
                     
+                    size_t mapping_start_idx = 0;
                     // merge mappings if they occur on the same node and same strand
                     if (curr_end_mapping->position().node_id() == next_start_mapping.position().node_id()
                         && curr_end_mapping->position().is_reverse() == next_start_mapping.position().is_reverse()) {
-                        *curr_end_mapping = concat_mappings(*curr_end_mapping, next_start_mapping);
-                    }
-                    else {
-                        *(opt_path->add_mapping()) = next_start_mapping;
+                        
+                        Edit* last_edit = curr_end_mapping->mutable_edit(curr_end_mapping->edit_size() - 1);
+                        const Edit& first_edit = next_start_mapping.edit(0);
+                        
+                        // merge the first edit if it is the same type
+                        size_t edit_start_idx = 0;
+                        if ((last_edit->from_length() > 0) == (first_edit.from_length() > 0)
+                            && (last_edit->to_length() > 0) == (first_edit.to_length() > 0)
+                            && (last_edit->sequence().empty()) == (first_edit.sequence().empty())) {
+                            
+                            last_edit->set_from_length(last_edit->from_length() + first_edit.from_length());
+                            last_edit->set_to_length(last_edit->to_length() + first_edit.to_length());
+                            last_edit->set_sequence(last_edit->sequence() + first_edit.sequence());
+                            
+                            edit_start_idx++;
+                            
+                        }
+                        
+                        // append the rest of the edits
+                        for (size_t j = edit_start_idx; j < next_start_mapping.edit_size(); j++) {
+                            *curr_end_mapping->add_edit() = next_start_mapping.edit(j);
+                        }
+                        
+                        mapping_start_idx++;
                     }
                     
                     // append the rest of the mappings
-                    for (size_t j = 1; j < next_path.mapping_size(); j++) {
-                        *(opt_path->add_mapping()) = next_path.mapping(j);
+                    for (size_t j = mapping_start_idx; j < next_path.mapping_size(); j++) {
+                        Mapping* next_mapping = opt_path->add_mapping();
+                        *next_mapping = next_path.mapping(j);
+                        next_mapping->set_rank(next_rank);
+                        next_rank++;
                     }
                 }
             }
