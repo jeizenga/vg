@@ -129,6 +129,23 @@ public:
     }
 };
 
+template<typename V>
+#ifdef USE_DENSE_HASH
+    class edge_hash_map : public dense_hash_map<std::tuple<id_t, bool, id_t, bool>,V,std::hash<std::tuple<id_t, bool, id_t, bool>> > {
+#else
+class edge_hash_map : public sparse_hash_map<std::tuple<id_t, bool, id_t, bool>,V,std::hashstd::<tuple<id_t, bool, id_t, bool>> > {
+#endif
+public:
+    edge_hash_map() {
+#ifdef USE_DENSE_HASH
+        this->set_empty_key(std::make_tuple<id_t, bool, id_t, bool>(-1, false, -1, false));
+#endif
+        this->set_deleted_key(std::make_tuple<id_t, bool, id_t, bool>(-2, false, -2, false));
+    }
+    
+};
+    
+
 template<typename K, typename V>
 #ifdef USE_DENSE_HASH
     class hash_map<K*,V> : public dense_hash_map<K*,V>

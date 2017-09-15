@@ -74,8 +74,8 @@ map<pair<id_t, id_t>, vector<id_t> > superbubbles(VG& graph) {
     auto supbubs = get_superbubbles(graph);
     //     hash_map<Node*, int> node_index;
     for (auto& bub : supbubs) {
-        auto start = graph.node_index[graph.get_node(bub.first)];
-        auto end = graph.node_index[graph.get_node(bub.second)];
+        auto start = graph.node_rank(bub.first);
+        auto end = graph.node_rank(bub.second);
         // get the nodes in the range
         auto& b = bubbles[bub];
         for (int i = start; i <= end; ++i) {

@@ -28,7 +28,7 @@ std::unique_ptr< list<NodeTraversal> >  FlowSort::max_flow_sort(const string& re
     for ( ; i < vg.graph.node_size() && n != sorted_nodes->rend();
           ++i, ++n) {
         // Put the nodes in the order we got
-        vg.swap_nodes(vg.graph.mutable_node(i), (*n).node);
+        vg.swap_nodes_unsafely(vg.graph.mutable_node(i), (*n).node);
     }
     vg.rebuild_indexes();
     return sorted_nodes;
@@ -46,7 +46,7 @@ void FlowSort::fast_linear_sort(const string& ref_name, bool isGrooming)
     w_graph.construct(*this,ref_name, isGrooming);
 
     //all nodes size
-    id_t nodes_size =vg.node_by_id.size();
+    size_t nodes_size = vg.graph.node_size();
 
     //create set of sinks and sources
     std::set<id_t> sources;
@@ -54,21 +54,22 @@ void FlowSort::fast_linear_sort(const string& ref_name, bool isGrooming)
     std::vector<std::set<id_t>> nodes_degree;
     int cur_node_degree;
     //find sources
-    for (auto const &entry : vg.node_by_id)
+    for (int i = 0; i < vg.graph.node_size(); i++)
     {
-        if(!w_graph.edges_in_nodes.count(entry.first) || 
-                w_graph.edges_in_nodes[entry.first].size() == 0)
+        id_t node_id = vg.graph.node(i).id();
+        if(!w_graph.edges_in_nodes.count(node_id) ||
+                w_graph.edges_in_nodes[node_id].size() == 0)
         {
-            sources.insert(entry.first);
+            sources.insert(node_id);
             continue;
         }
-        cur_node_degree = get_node_degree(w_graph, entry.first);
+        cur_node_degree = get_node_degree(w_graph, node_id);
         if (cur_node_degree < 0)
             continue;
 
         if (cur_node_degree + 1 > nodes_degree.size())
             nodes_degree.resize(cur_node_degree + 1);
-        nodes_degree[cur_node_degree].insert(entry.first);
+        nodes_degree[cur_node_degree].insert(node_id);
         //if(edges_out_nodes.find(entry.first) != edges_out_nodes.end() )
         //   sinks.insert(entry.first);
     }
@@ -103,7 +104,7 @@ void FlowSort::fast_linear_sort(const string& ref_name, bool isGrooming)
 
         //add next node
         //sorted.push_back(next);
-        NodeTraversal node = NodeTraversal(vg.node_by_id[next], false);
+        NodeTraversal node = NodeTraversal(vg.get_node(next), false);
         sorted_nodes.push_back(node);
 
         //remove edges related with node
@@ -118,7 +119,7 @@ void FlowSort::fast_linear_sort(const string& ref_name, bool isGrooming)
     for ( ; i < vg.graph.node_size() && n != sorted_nodes.end();
           ++i, ++n) {
         // Put the nodes in the order we got
-        vg.swap_nodes(vg.graph.mutable_node(i), (*n).node);
+        vg.swap_nodes_unsafely(vg.graph.mutable_node(i), (*n).node);
     }
     vg.rebuild_indexes();
 }
@@ -141,9 +142,9 @@ void FlowSort::flow_sort_nodes(list<NodeTraversal>& sorted_nodes,
         growth.backbone.insert(mapping.position().node_id());
         growth.ref_path.push_back(mapping.position().node_id());
     }
-    for (auto const &entry : vg.node_by_id) 
+    for (int i = 0; i < vg.graph.node_size(); i++)
     {
-        growth.nodes.insert(entry.first);
+        growth.nodes.insert(vg.graph.node(i).id());
     }
 
     set<id_t> unsorted_nodes(growth.nodes.begin(), growth.nodes.end());
@@ -210,7 +211,7 @@ void FlowSort::flow_sort_nodes(list<NodeTraversal>& sorted_nodes,
     {
         for (auto const &id : unsorted_nodes) 
         {
-            NodeTraversal node = NodeTraversal(vg.node_by_id[id], false);
+            NodeTraversal node = NodeTraversal(vg.get_node(id), false);
             sorted_nodes.push_back(node);
         }
     }
@@ -248,44 +249,43 @@ FlowSort::WeightedGraph::construct(FlowSort& fs, const string& ref_name, bool is
     map<id_t, set<Edge*>> minus_end;//vertex - edges
     set<id_t> nodes;
     id_t start_ref_node = 0;
-    for (auto &edge : fs.vg.edge_index)
+    for (int i = 0; i < fs.vg.graph.edge_size(); i++)
     {
-        id_t from = edge.first->from();
-        id_t to = edge.first->to();
-        if (edge.first->from_start() || edge.first->to_end())
+        Edge* edge = fs.vg.graph.mutable_edge(i);
+        if (edge->from_start() || edge->to_end())
         {
-                minus_start[from].insert(edge.first);
-                minus_end[to].insert(edge.first);
+                minus_start[edge->from()].insert(edge);
+                minus_end[edge->to()].insert(edge);
         }
         else
         {
-            edges_out_nodes[edge.first->from()].push_back(edge.first);
-            edges_in_nodes[edge.first->to()].push_back(edge.first);
+            edges_out_nodes[edge->from()].push_back(edge);
+            edges_in_nodes[edge->to()].push_back(edge);
         }
         //Node* nodeTo = node_by_id[edge.first->to()];
-        nodes.insert(edge.first->from());
-        nodes.insert(edge.first->to());
+        nodes.insert(edge->from());
+        nodes.insert(edge->to());
 
         //assign weight to the minimum number of paths of the adjacent nodes
-        auto from_node_mapping = fs.vg.paths.get_node_mapping(from);
+        auto from_node_mapping = fs.vg.paths.get_node_mapping(edge->from()  );
 //        NodeMapping to_node_mapping = paths.get_node_mapping(to);
         int weight = 1;
 
         for (auto const &path_mapping : from_node_mapping) {
             string path_name = path_mapping.first;
-            if (fs.vg.paths.are_consecutive_nodes_in_path(from, to, path_name))
+            if (fs.vg.paths.are_consecutive_nodes_in_path(edge->from(), edge->to(), path_name))
             {
                 if (path_name == ref_name)
                 {
                     weight += ref_weight;
                     if(start_ref_node == 0)
-                        start_ref_node = edge.first->from();
+                        start_ref_node = edge->from();
                 }
                 weight++;
             }
         }
 
-        edge_weight[edge.first] = weight;
+        edge_weight[edge] = weight;
 #ifdef debug        
         cerr << from << "->" << to << " " << weight << endl;
 #endif
@@ -305,7 +305,7 @@ FlowSort::WeightedGraph::construct(FlowSort& fs, const string& ref_name, bool is
 
             }
         }
-        fs.vg.rebuild_edge_indexes();
+        fs.vg.rebuild_indexes();
     }
 //    return WeightedGraph(edges_out_nodes, edges_in_nodes, edge_weight);
 }
@@ -655,7 +655,7 @@ void FlowSort::find_in_out_web(list<NodeTraversal>& sorted_nodes,
             {
                 continue;
             }
-            NodeTraversal node (vg.node_by_id[id], false);
+            NodeTraversal node (vg.get_node(id), false);
             sorted_nodes.push_back(node);
             unsorted_nodes.erase(id);
 //            cerr << "erasing " << id << endl;
@@ -761,7 +761,7 @@ void FlowSort::find_in_out_web(list<NodeTraversal>& sorted_nodes,
     for (auto const &current_id: ref_path) 
     {
         list<NodeTraversal> sort_out;
-        NodeTraversal node = NodeTraversal(vg.node_by_id[current_id], false);
+        NodeTraversal node = NodeTraversal(vg.get_node(current_id), false);
         //out growth
         process_in_out_growth(edges_out_nodes, current_id, io_growth,
                     w_graph, visited, sort_out, false, unsorted_nodes, 

@@ -103,44 +103,54 @@ public:
     //id_t max_id;
 
     /// `Node`s by id.
-    hash_map<id_t, Node*> node_by_id;
+    //hash_map<id_t, Node*> node_by_id;
 
     /// `Edge`s by sides of `Node`s they connect.
     /// Since duplicate edges are not permitted, two edges cannot connect the same pair of node sides.
     /// Each edge is indexed here with the smaller NodeSide first. The actual node order is recorded in the Edge object.
-    pair_hash_map<pair<NodeSide, NodeSide>, Edge*> edge_by_sides;
+    //pair_hash_map<pair<NodeSide, NodeSide>, Edge*> edge_by_sides;
 
     /// nodes by position in nodes repeated field.
     /// this is critical to allow fast deletion of nodes
-    hash_map<Node*, int> node_index;
+    //hash_map<Node*, int> node_index;
 
     // edges by position in edges repeated field.
     // same as for nodes, this allows fast deletion.
-    hash_map<Edge*, int> edge_index;
+    //hash_map<Edge*, int> edge_index;
 
     // edges indexed by nodes they connect.
     
     /// Stores the destinations and backward flags for edges attached to the starts of nodes (whether that node is "from" or "to").
-    hash_map<id_t, vector<pair<id_t, bool>>> edges_on_start;
+    //hash_map<id_t, vector<pair<id_t, bool>>> edges_on_start;
     /// Stores the destinations and backward flags for edges attached to the ends of nodes (whether that node is "from" or "to").
-    hash_map<id_t, vector<pair<id_t, bool>>> edges_on_end;
+    //hash_map<id_t, vector<pair<id_t, bool>>> edges_on_end;
+    
+    /// Map from IDs to tuples of (node index, edge indexes on start, edge indexes on end)
+    hash_map<id_t, tuple<int, vector<int>, vector<int>>> node_index;
+    
+    /// Map from a canonical edge representation to edge index
+    edge_hash_map<int> edge_index;
+    
+    /// A canonical representation of edge as (from, from_start, to, to_end), where from is always lower
+    /// ID than to, which is used as the key for the edge index
+    tuple<id_t, bool, id_t, bool> canonical_edge_key(const Edge& edge);
+    tuple<id_t, bool, id_t, bool> canonical_edge_key(const NodeSide& side1, const NodeSide& side2);
+    
+    /// Add the edge at this index in the list to the indexes
+    void index_edge(int idx);
 
-    /// Set the edge indexes through this function. Picks up the sides being
-    /// connected by the edge automatically, and silently drops the edge if they
-    /// are already connected.
-    void set_edge(Edge*);
     void print_edges(void);
 
     // access the edge indexes through these functions
     
     /// Get nodes and backward flags following edges that attach to this node's start.
-    vector<pair<id_t, bool>>& edges_start(Node* node);
+    vector<pair<id_t, bool>> edges_start(Node* node);
     /// Get nodes and backward flags following edges that attach to this node's start.
-    vector<pair<id_t, bool>>& edges_start(id_t id);
+    vector<pair<id_t, bool>> edges_start(id_t id);
     /// Get nodes and backward flags following edges that attach to this node's end.
-    vector<pair<id_t, bool>>& edges_end(Node* node);
+    vector<pair<id_t, bool>> edges_end(Node* node);
     /// Get nodes and backward flags following edges that attach to this node's end.
-    vector<pair<id_t, bool>>& edges_end(id_t id);
+    vector<pair<id_t, bool>> edges_end(id_t id);
     
     // properties of the graph
     size_t size(void); ///< Number of nodes
@@ -313,20 +323,23 @@ public:
     }
 
     // TODO: document all these
+    // TODO: with refactor of indexing strategy, some of these
+    // don't really make sense as independent functions (esp. b/c
+    // edges are sort of blended into the node index)
 
     void build_indexes(void);
-    void build_node_indexes(void);
-    void build_edge_indexes(void);
+    void build_node_index(void);
+    void build_edge_index(void);
     void index_paths(void);
-    void clear_node_indexes(void);
-    void clear_node_indexes_no_resize(void);
-    void clear_edge_indexes(void);
-    void clear_edge_indexes_no_resize(void);
+    void clear_node_index(void);
+    void clear_node_index_no_resize(void);
+    void clear_edge_index(void);
+    void clear_edge_index_no_resize(void);
     void clear_indexes(void);
     void clear_indexes_no_resize(void);
     void resize_indexes(void);
     void rebuild_indexes(void);
-    void rebuild_edge_indexes(void);
+    void rebuild_edge_index(void);
 
     /// Literally merge protobufs.
     void merge(Graph& g);
@@ -742,17 +755,22 @@ public:
     void destroy_edge(const NodeSide& side1, const NodeSide& side2);
     /// Destroy the edge between the given sides of nodes. This can take sides in any order
     void destroy_edge(const pair<NodeSide, NodeSide>& sides);
-    /// Remove an edge from the node side indexes, so it doesn't show up when you
+    
+    
+    // TODO: the new indexes don't support this in the same way, so this gives
+    // worst case quadratic run time to topo sort, need to rewrite toposort
+    
+    /// Remove an edge from the adjacency list index, so it doesn't show up when you
     /// ask for the edges connected to the side of a node. Makes the edge
     /// untraversable until the indexes are rebuilt.
-    void unindex_edge_by_node_sides(const NodeSide& side1, const NodeSide& side2);
-    /// Remove an edge from the node side indexes, so it doesn't show up when you
+    void unindex_edge_for_traversal(const NodeSide& side1, const NodeSide& side2);
+    /// Remove an edge from the adjacency list index, so it doesn't show up when you
     /// ask for the edges connected to the side of a node. Makes the edge
     /// untraversable until the indexes are rebuilt.
-    void unindex_edge_by_node_sides(Edge* edge);
+    void unindex_edge_for_traversal(Edge* edge);
     /// Add an edge to the node side indexes. Doesn't touch the index of edges by
     /// node pairs or the graph; those must be updated seperately.
-    void index_edge_by_node_sides(Edge* edge);
+    void index_edge_for_traversal(Edge* edge);
     /// Get the edge between the given node sides, which can be in either order.
     bool has_edge(const NodeSide& side1, const NodeSide& side2);
     /// Determine if the graph has an edge. This can take sides in any order.
@@ -839,8 +857,8 @@ public:
     void sort(void);
     /// Topological sort helper function, not really meant for external use.
     void topological_sort(deque<NodeTraversal>& l);
-    /// Swap the given nodes. TODO: what does that mean?
-    void swap_nodes(Node* a, Node* b);
+    /// Swap the nodes in the underlying Protobuf Graph, but do not maintain indexes
+    void swap_nodes_unsafely(Node* a, Node* b);
 
     /// Use a topological sort to order and orient the nodes, and then flip some
     /// nodes around so that they are oriented the way they are in the sort.
