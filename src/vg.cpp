@@ -8449,7 +8449,7 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
     // them first, and then arbitrarily. We ignore tails since we only orient
     // right from nodes we pick.
     // Maps from node ID to first orientation we suggested for it.
-    map<id_t, NodeTraversal> seeds;
+    unordered_map<id_t, NodeTraversal> seeds;
     for(Node* head : heads) {
         seeds[head->id()] = NodeTraversal(head, false);
     }
@@ -8458,7 +8458,7 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
     // and remove index entries from it when we visit nodes. It will be rebuilt
     // when we rebuild the indexes later. We know its order will be fixed across
     // systems.
-    map<id_t, Node*> unvisited;
+    unordered_map<id_t, Node*> unvisited;
     // Fill it in, we can't use the copy constructor since std::map doesn't speak vg::hash_map
     // TODO: is the vg::hash_map order fixed across systems?
     for_each_node([&](Node* node) {
