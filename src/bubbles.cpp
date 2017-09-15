@@ -241,9 +241,9 @@ static void fill_ultrabubble_contents(VG& graph, Bubble& bubble) {
     // note we treat the source in the opposite direction as a sink here to prevent leaving
     // the bubble in a loop
     id_t sink_id = bubble.end.node;
-    set<NodeTraversal> sinks = {NodeTraversal(graph.get_node(bubble.start.node), bubble.start.is_end),
-                                NodeTraversal(graph.get_node(sink_id), !bubble.start.is_end),
-                                NodeTraversal(graph.get_node(sink_id), bubble.start.is_end)};
+    unordered_set<NodeTraversal> sinks = {NodeTraversal(graph.get_node(bubble.start.node), bubble.start.is_end),
+                                    NodeTraversal(graph.get_node(sink_id), !bubble.start.is_end),
+                                    NodeTraversal(graph.get_node(sink_id), bubble.start.is_end)};
 
     // remember unique node ids we've visited 
     set<id_t> contents_set;

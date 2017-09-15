@@ -637,13 +637,13 @@ public:
         /// Start only at these node traversals.
         const vector<NodeTraversal>* sources,
         /// When hitting a sink, don't keep walking.
-        const set<NodeTraversal>* sinks);         
+        const unordered_set<NodeTraversal>* sinks);
 
     /// Specialization of dfs for only handling nodes.
     void dfs(const function<void(NodeTraversal)>& node_begin_fn,
              const function<void(NodeTraversal)>& node_end_fn,
              const vector<NodeTraversal>* sources = NULL,
-             const set<NodeTraversal>* sinks = NULL);         
+             const unordered_set<NodeTraversal>* sinks = NULL);
 
     /// Specialization of dfs for only handling nodes + break function.
     void dfs(const function<void(NodeTraversal)>& node_begin_fn,

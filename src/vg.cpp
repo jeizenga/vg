@@ -2977,12 +2977,12 @@ void VG::dfs(
     const function<void(Edge*)>& edge_curr_fn,  // called when we meet an edge in the current tree component
     const function<void(Edge*)>& edge_cross_fn, // called when we meet an edge in an already-traversed tree component
     const vector<NodeTraversal>* sources,       // start only at these node traversals
-    const set<NodeTraversal>* sinks             // when hitting a sink, don't keep walking
+    const unordered_set<NodeTraversal>* sinks             // when hitting a sink, don't keep walking
     ) {
 
     // to maintain search state
     enum SearchState { PRE = 0, CURR, POST };
-    map<NodeTraversal, SearchState> state; // implicitly constructed entries will be PRE.
+    unordered_map<NodeTraversal, SearchState> state; // implicitly constructed entries will be PRE.
 
     // to maintain stack frames
     struct Frame {
@@ -2995,9 +2995,9 @@ void VG::dfs(
     };
 
     // maintains edges while the node traversal's frame is on the stack
-    map<NodeTraversal, vector<Edge*> > edges;
+    unordered_map<NodeTraversal, vector<Edge*> > edges;
     // records when we're on the stack
-    set<NodeTraversal> in_frame;
+    unordered_set<NodeTraversal> in_frame;
 
     // do dfs from given root.  returns true if terminated via break condition, false otherwise
     function<bool(NodeTraversal&)> dfs_single_source = [&](NodeTraversal& root) {
@@ -3124,7 +3124,7 @@ void VG::dfs(
 void VG::dfs(const function<void(NodeTraversal)>& node_begin_fn,
              const function<void(NodeTraversal)>& node_end_fn,
              const vector<NodeTraversal>* sources,
-             const set<NodeTraversal>* sinks) {
+             const unordered_set<NodeTraversal>* sinks) {
     auto edge_noop = [](Edge* e) { };
     dfs(node_begin_fn,
         node_end_fn,
@@ -3266,7 +3266,7 @@ vector<Edge> VG::break_cycles(void) {
 }
 
 bool VG::is_acyclic(void) {
-    set<NodeTraversal> seen;
+    unordered_set<NodeTraversal> seen;
     bool acyclic = true;
     dfs([&](NodeTraversal trav) {
             // When a node orientation is first visited
