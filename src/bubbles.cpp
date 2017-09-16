@@ -428,6 +428,7 @@ VG cactus_to_vg(stCactusGraph* cactus_graph) {
             // make a new vg edge
             Edge* vg_edge = vg_graph.create_edge(map_node(cac_edge.first),
                                                  map_node(cac_edge.second));
+            cerr << "cactus made edge " << pb2json(*vg_edge) << endl;
         }
     }
     stCactusGraphNodeIterator_destruct(node_it);

@@ -337,6 +337,7 @@ void VG::add_edge(const Edge& edge) {
         int idx = graph.edge_size();
         *graph.add_edge() = edge;
         // add it to the indexes
+        cerr << "adding edge" << endl;
         index_edge(idx);
     }
 }
@@ -424,12 +425,15 @@ vector<pair<id_t, bool>> VG::edges_start(id_t id) {
         return to_return;
     }
     for (int i : get<1>(node_index[id])) {
-        cerr << "to edge index at " << i << endl;
+        cerr << "to edge index at " << i << " on graph with " << graph.edge_size() << " edges " <<  endl;
+        cerr << "on graph " << pb2json(graph) << endl;
         const Edge& edge = graph.edge(i);
         if (edge.from() == id && edge.from_start()) {
+            cerr << "goint through from" << endl;
             to_return.push_back(make_pair(edge.to(), edge.to_end()));
         }
         else {
+            cerr << "goint through to" << endl;
             to_return.push_back(make_pair(edge.from(), !edge.from_start()));
         }
     }
@@ -451,6 +455,7 @@ vector<pair<id_t, bool>> VG::edges_end(id_t id) {
     }
     for (int i : get<2>(node_index[id])) {
         const Edge& edge = graph.edge(i);
+        cerr << "got edge " << pb2json(edge) << endl;
         if (edge.from() == id && !edge.from_start()) {
             to_return.push_back(make_pair(edge.to(), edge.to_end()));
         }
@@ -1945,6 +1950,7 @@ void VG::build_node_index(void) {
 }
 
 void VG::build_edge_index(void) {
+    cerr << "building edge index" << endl;
     for (int i = 0; i < graph.edge_size(); ++i) {
         index_edge(i);
     }
@@ -2365,7 +2371,7 @@ void VG::swap_node_id(id_t node_id, id_t new_id) {
 }
 
 void VG::swap_node_id(Node* node, id_t new_id) {
-
+    cerr << "##" << endl << "SWAPPING NODE ID" << endl;
     id_t old_id = node->id();
     node->set_id(new_id);
 
@@ -2953,6 +2959,7 @@ void VG::print_edges(void) {
 void VG::sort(void) {
     if (size() <= 1) return;
     // Join heads to a root to ensure stable topo sort
+    cerr << "joining heads for topo sort" << endl;
     Node* root = join_heads();
     // Topologically sort, which orders and orients all the nodes.
     deque<NodeTraversal> sorted_nodes;
@@ -3380,6 +3387,7 @@ size_t VG::length(void) {
 }
 
 void VG::swap_nodes_unsafely(Node* a, Node* b) {
+    cerr << "SWAPPING UNSAFELY" << endl;
     auto& node_a_record = node_index[a->id()];
     auto& node_b_record = node_index[b->id()];
     graph.mutable_node()->SwapElements(get<0>(node_a_record), get<0>(node_b_record));
@@ -3413,6 +3421,7 @@ Edge* VG::create_edge(id_t from, id_t to, bool from_start, bool to_end) {
     edge->set_to(to);
     edge->set_from_start(from_start);
     edge->set_to_end(to_end);
+    cerr << "creating edge" << endl;
     index_edge(graph.edge_size()-1);
     return edge;
 }
@@ -3467,6 +3476,8 @@ void VG::destroy_edge(Edge* edge) {
     // noop on NULL pointer or non-existent edge
     if (!has_edge(edge)) { return; }
 
+    unindex_edge_for_traversal(edge);
+    
     auto key = canonical_edge_key(*edge);
     int idx = edge_index[key];
     edge_index.erase(key);
@@ -3529,8 +3540,21 @@ void VG::index_edge_for_traversal(Edge* edge) {
 }
 
 Node* VG::get_node(id_t id) {
-    auto iter = node_index.find(id);
-    return iter == node_index.end() ? nullptr : graph.mutable_node(get<0>(*iter));
+    if (!node_index.count(id)) {
+        cerr << "getting node " << id << " at index " << get<0>(node_index[id]) << " of " << graph.node_size() <<  endl;
+        return graph.mutable_node(get<0>(node_index[id]));
+    }
+    else {
+        return nullptr;
+    }
+    //cerr << "index of node 10 " << get<0>(node_index[10]) << endl;
+    //auto iter = node_index.find(id);
+    //if (iter != node_index.end()) {
+    //    cerr << "getting node " << id << " at index " << get<0>(*iter) << " of " << graph.node_size() <<  endl;
+    //    cerr << "getting node " << id << " at index " << get<0>(node_index[10]) << " of " << graph.node_size() <<  endl;
+    //}
+    //cerr << "gets through loop" << endl;
+    //return iter == node_index.end() ? nullptr : graph.mutable_node(get<0>(*iter));
 }
 
 Node* VG::create_node(const string& seq, id_t id) {
@@ -3545,10 +3569,11 @@ Node* VG::create_node(const string& seq, id_t id) {
     } else {
         node->set_id(id);
     }
+    cerr << "create node " << node->id() << " " << node->sequence() << " with node index " << graph.node_size() - 1 << endl;
     // copy it into the graph
-    node_index[id] = make_tuple<int, vector<int>, vector<int>>(graph.node_size() - 1,
-                                                               vector<int>(),
-                                                               vector<int>());
+    node_index[node->id()] = make_tuple<int, vector<int>, vector<int>>(graph.node_size() - 1,
+                                                                       vector<int>(),
+                                                                       vector<int>());
     return node;
 }
 
@@ -3637,6 +3662,8 @@ void VG::destroy_node(Node* node) {
     // noop on NULL/nonexistent node
     if (!has_node(node)) { return; }
     
+    cerr << "destroying node " << pb2json(*node) << endl;
+    
     auto& node_record = node_index[node->id()];
     
     for (vector<int>* edge_list : {&get<1>(node_record), &get<2>(node_record)}) {
@@ -3663,6 +3690,7 @@ void VG::destroy_node(Node* node) {
                             break;
                         }
                     }
+                    cerr << "removing edge at index " << i << " pointing to node " << edge.to() << endl;
                     std::swap(to_idxs[i], to_idxs.back());
                     to_idxs.pop_back();
                 }
@@ -3675,6 +3703,7 @@ void VG::destroy_node(Node* node) {
                             break;
                         }
                     }
+                    cerr << "removing edge at index " << i << " pointing to node " << edge.from() << endl;
                     std::swap(from_idxs[i], from_idxs.back());
                     from_idxs.pop_back();
                 }
@@ -4098,10 +4127,16 @@ void VG::nodes_prev(NodeTraversal node, vector<NodeTraversal>& nodes) {
     // Get the node IDs that attach to the left of this node, and whether we are
     // attached relatively forward (false) or backward (true)
     vector<pair<id_t, bool>> left_nodes = node.backward ? edges_end(node.node) : edges_start(node.node);
+    for (auto p : left_nodes) {
+        cerr << "\t" << p.first << " " << p.second << endl;
+    }
+    cerr << "index of node 10 is " << get<0>(node_index[10]) << endl;
     for (auto& prev : left_nodes) {
+        cerr << "left node " << prev.first << " " << prev.second << endl;
         // Make a NodeTraversal that is an oriented description of the node attached to our relative left.
         // If we're backward, and it's in the same relative orientation as us, it needs to be backward too.
         nodes.emplace_back(get_node(prev.first), prev.second != node.backward);
+        cerr << "added node to prev" << endl;
     }
 }
 
@@ -8279,6 +8314,33 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
     cerr << "=====================STARTING SORT==========================" << endl;
 #endif
 
+    auto print_indexes = [&](void) {
+        cerr << endl << "NODE" << endl;
+        for (auto& node_record : node_index) {
+            cerr << "\t" << node_record.first << "\t" << get<0>(node_record.second) << endl;
+            cerr << "\t\tstart: ";
+            for (int i : get<1>(node_record.second)) {
+                cerr << i << " ";
+            }
+            cerr << endl;
+            cerr << "\t\tend: ";
+            for (int i : get<2>(node_record.second)) {
+                cerr << i << " ";
+            }
+            cerr << endl;
+        }
+        cerr << "EDGE" << endl;
+        for (auto& edge_record : edge_index) {
+            cerr << "\t" << get<0>(edge_record.first) << " " << get<1>(edge_record.first) << " " << get<2>(edge_record.first) << " " << get<3>(edge_record.first) << "\t\t" << edge_record.second << endl;
+        }
+        cerr << "GRAPH" << endl;
+        for (int i = 0; i < graph.node_size(); i++) {
+            cerr << i << " " << pb2json(graph.node(i)) << endl;
+        }
+        for (int i = 0; i < graph.edge_size(); i++) {
+            cerr << i << " " << pb2json(graph.edge(i)) << endl;
+        }
+    };
     // using a map instead of a set ensures a stable sort across different systems
     map<id_t, NodeTraversal> s;
 
@@ -8312,7 +8374,8 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
     id_t seen = 0;
 
     while(!unvisited.empty()) {
-
+        
+        //cerr << "$$" << endl << "index of node 10 is " << get<0>(node_index[10]) << endl << "$$" <<endl;
         // Put something in s. First go through seeds until we can find one
         // that's not already oriented.
         while(s.empty() && !seeds.empty()) {
@@ -8346,6 +8409,7 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
         }
 
         while (!s.empty()) {
+            print_indexes();
             // Grab an oriented node
             NodeTraversal n = s.begin()->second;
             s.erase(n.node->id());
@@ -8361,6 +8425,7 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
             // reversing self loop on a cycle entry point is a special case of
             // this.
             cerr << "get nodes prev" << endl;
+            cerr << "index of node 10 is " << get<0>(node_index[10]) << endl;
             vector<NodeTraversal> prev;
             nodes_prev(n, prev);
             cerr << "finished getting nodes prev" << endl;
@@ -8389,6 +8454,7 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
             // See what all comes next, minus deleted edges.
             vector<NodeTraversal> next;
             nodes_next(n, next);
+            cerr << "finishes getting nodes next" << endl;
             for(NodeTraversal& next_node : next) {
 
 #ifdef debug

@@ -62,7 +62,6 @@ namespace vg {
         size_t max_expected_dist_approx_error = 8;
         int32_t num_alt_alns = 4;
         double mem_coverage_min_ratio = 0.5;
-        int32_t max_suboptimal_path_score_diff = 20;
         
     private:
         
@@ -101,6 +100,7 @@ namespace vg {
         SnarlManager* snarl_manager;
         
         //double z_score_cutoff = -1.0;
+        int32_t max_suboptimal_path_score_diff = 20;
     };
     
     // TODO: put in MultipathAlignmentGraph namespace
