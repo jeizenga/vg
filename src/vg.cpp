@@ -337,7 +337,6 @@ void VG::add_edge(const Edge& edge) {
         int idx = graph.edge_size();
         *graph.add_edge() = edge;
         // add it to the indexes
-        cerr << "adding edge" << endl;
         index_edge(idx);
     }
 }
@@ -345,24 +344,19 @@ void VG::add_edge(const Edge& edge) {
 void VG::index_edge(int idx) {
     // add to edge index
     const Edge& edge = graph.edge(idx);
-    cerr << "marking edge " << pb2json(edge) << " at index " << idx << endl;
     edge_index[canonical_edge_key(edge)] = idx;
     // add to node index
     if (edge.from_start()) {
-        cerr << "add start edge to node " << edge.from() << endl;
         get<1>(node_index[edge.from()]).push_back(idx);
     }
     else {
-        cerr << "add end edge to node " << edge.from() << endl;
         get<2>(node_index[edge.from()]).push_back(idx);
     }
     if (!(edge.from() == edge.to() && edge.from_start() != edge.to_end())) {
         if (edge.to_end()) {
-            cerr << "add end edge to node " << edge.to() << endl;
             get<2>(node_index[edge.to()]).push_back(idx);
         }
         else {
-            cerr << "add start edge to node " << edge.to() << endl;
             get<1>(node_index[edge.to()]).push_back(idx);
         }
     }
@@ -418,22 +412,16 @@ vector<pair<id_t, bool>> VG::edges_start(Node* node) {
 }
 
 vector<pair<id_t, bool>> VG::edges_start(id_t id) {
-    cerr << "getting edges start of node " << id << endl;
     vector<pair<id_t, bool>> to_return;
     if(node_index.count(id) == 0) {
-        cerr << "returning empty" << endl;
         return to_return;
     }
     for (int i : get<1>(node_index[id])) {
-        cerr << "to edge index at " << i << " on graph with " << graph.edge_size() << " edges " <<  endl;
-        cerr << "on graph " << pb2json(graph) << endl;
         const Edge& edge = graph.edge(i);
         if (edge.from() == id && edge.from_start()) {
-            cerr << "goint through from" << endl;
             to_return.push_back(make_pair(edge.to(), edge.to_end()));
         }
         else {
-            cerr << "goint through to" << endl;
             to_return.push_back(make_pair(edge.from(), !edge.from_start()));
         }
     }
@@ -448,14 +436,12 @@ vector<pair<id_t, bool>> VG::edges_end(Node* node) {
 }
 
 vector<pair<id_t, bool>> VG::edges_end(id_t id) {
-    cerr << "getting edges end" << endl;
     vector<pair<id_t, bool>> to_return;
     if(node_index.count(id) == 0) {
         return to_return;
     }
     for (int i : get<2>(node_index[id])) {
         const Edge& edge = graph.edge(i);
-        cerr << "got edge " << pb2json(edge) << endl;
         if (edge.from() == id && !edge.from_start()) {
             to_return.push_back(make_pair(edge.to(), edge.to_end()));
         }
@@ -1944,13 +1930,11 @@ id_t VG::total_length_of_nodes(void) {
 
 void VG::build_node_index(void) {
     for (int i = 0; i < graph.node_size(); ++i) {
-        cerr << "adding node " << graph.node(i).id() << " at index " << i << endl;
         node_index[graph.node(i).id()] = make_tuple(i, vector<int>(), vector<int>());
     }
 }
 
 void VG::build_edge_index(void) {
-    cerr << "building edge index" << endl;
     for (int i = 0; i < graph.edge_size(); ++i) {
         index_edge(i);
     }
@@ -3387,7 +3371,6 @@ size_t VG::length(void) {
 }
 
 void VG::swap_nodes_unsafely(Node* a, Node* b) {
-    cerr << "SWAPPING UNSAFELY" << endl;
     auto& node_a_record = node_index[a->id()];
     auto& node_b_record = node_index[b->id()];
     graph.mutable_node()->SwapElements(get<0>(node_a_record), get<0>(node_b_record));
@@ -3421,14 +3404,14 @@ Edge* VG::create_edge(id_t from, id_t to, bool from_start, bool to_end) {
     edge->set_to(to);
     edge->set_from_start(from_start);
     edge->set_to_end(to_end);
-    cerr << "creating edge" << endl;
     index_edge(graph.edge_size()-1);
     return edge;
 }
 
 Edge* VG::get_edge(const NodeSide& side1, const NodeSide& side2) {
     auto key = canonical_edge_key(side1, side2);
-    return edge_index.count(key) ? graph.mutable_edge(edge_index[key]) : nullptr;
+    auto iter = edge_index.find(key);
+    return iter != edge_index.end() ? graph.mutable_edge(iter->second) : nullptr;
 }
 
 Edge* VG::get_edge(const pair<NodeSide, NodeSide>& sides) {
@@ -3540,21 +3523,8 @@ void VG::index_edge_for_traversal(Edge* edge) {
 }
 
 Node* VG::get_node(id_t id) {
-    if (!node_index.count(id)) {
-        cerr << "getting node " << id << " at index " << get<0>(node_index[id]) << " of " << graph.node_size() <<  endl;
-        return graph.mutable_node(get<0>(node_index[id]));
-    }
-    else {
-        return nullptr;
-    }
-    //cerr << "index of node 10 " << get<0>(node_index[10]) << endl;
-    //auto iter = node_index.find(id);
-    //if (iter != node_index.end()) {
-    //    cerr << "getting node " << id << " at index " << get<0>(*iter) << " of " << graph.node_size() <<  endl;
-    //    cerr << "getting node " << id << " at index " << get<0>(node_index[10]) << " of " << graph.node_size() <<  endl;
-    //}
-    //cerr << "gets through loop" << endl;
-    //return iter == node_index.end() ? nullptr : graph.mutable_node(get<0>(*iter));
+    auto iter = node_index.find(id);
+    return iter == node_index.end() ? nullptr : graph.mutable_node(get<0>(iter->second));
 }
 
 Node* VG::create_node(const string& seq, id_t id) {
@@ -3569,7 +3539,6 @@ Node* VG::create_node(const string& seq, id_t id) {
     } else {
         node->set_id(id);
     }
-    cerr << "create node " << node->id() << " " << node->sequence() << " with node index " << graph.node_size() - 1 << endl;
     // copy it into the graph
     node_index[node->id()] = make_tuple<int, vector<int>, vector<int>>(graph.node_size() - 1,
                                                                        vector<int>(),
@@ -4127,16 +4096,10 @@ void VG::nodes_prev(NodeTraversal node, vector<NodeTraversal>& nodes) {
     // Get the node IDs that attach to the left of this node, and whether we are
     // attached relatively forward (false) or backward (true)
     vector<pair<id_t, bool>> left_nodes = node.backward ? edges_end(node.node) : edges_start(node.node);
-    for (auto p : left_nodes) {
-        cerr << "\t" << p.first << " " << p.second << endl;
-    }
-    cerr << "index of node 10 is " << get<0>(node_index[10]) << endl;
     for (auto& prev : left_nodes) {
-        cerr << "left node " << prev.first << " " << prev.second << endl;
         // Make a NodeTraversal that is an oriented description of the node attached to our relative left.
         // If we're backward, and it's in the same relative orientation as us, it needs to be backward too.
-        nodes.emplace_back(get_node(prev.first), prev.second != node.backward);
-        cerr << "added node to prev" << endl;
+        nodes.emplace_back(get_node(prev.first), prev.second);
     }
 }
 
@@ -4153,7 +4116,7 @@ void VG::nodes_next(NodeTraversal node, vector<NodeTraversal>& nodes) {
     for (auto& next : right_nodes) {
         // Make a NodeTraversal that is an oriented description of the node attached to our relative right.
         // If we're backward, and it's in the same relative orientation as us, it needs to be backward too.
-        nodes.emplace_back(get_node(next.first), next.second != node.backward);
+        nodes.emplace_back(get_node(next.first), next.second);
     }
 }
 
@@ -8279,6 +8242,34 @@ void VG::wrap_with_null_nodes(void) {
         create_edge(*t, tail);
     }
 }
+    
+void VG::print_indexes(void) {
+    cerr << endl << "NODE" << endl;
+    for (auto& node_record : node_index) {
+        cerr << "\t" << node_record.first << "\t" << get<0>(node_record.second) << endl;
+        cerr << "\t\tstart: ";
+        for (int i : get<1>(node_record.second)) {
+            cerr << i << " ";
+        }
+        cerr << endl;
+        cerr << "\t\tend: ";
+        for (int i : get<2>(node_record.second)) {
+            cerr << i << " ";
+        }
+        cerr << endl;
+    }
+    cerr << "EDGE" << endl;
+    for (auto& edge_record : edge_index) {
+        cerr << "\t" << get<0>(edge_record.first) << " " << get<1>(edge_record.first) << " " << get<2>(edge_record.first) << " " << get<3>(edge_record.first) << "\t\t" << edge_record.second << endl;
+    }
+    cerr << "GRAPH" << endl;
+    for (int i = 0; i < graph.node_size(); i++) {
+        cerr << i << " " << pb2json(graph.node(i)) << endl;
+    }
+    for (int i = 0; i < graph.edge_size(); i++) {
+        cerr << i << " " << pb2json(graph.edge(i)) << endl;
+    }
+}
 
 /**
 Order and orient the nodes in the graph using a topological sort.
@@ -8314,33 +8305,6 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
     cerr << "=====================STARTING SORT==========================" << endl;
 #endif
 
-    auto print_indexes = [&](void) {
-        cerr << endl << "NODE" << endl;
-        for (auto& node_record : node_index) {
-            cerr << "\t" << node_record.first << "\t" << get<0>(node_record.second) << endl;
-            cerr << "\t\tstart: ";
-            for (int i : get<1>(node_record.second)) {
-                cerr << i << " ";
-            }
-            cerr << endl;
-            cerr << "\t\tend: ";
-            for (int i : get<2>(node_record.second)) {
-                cerr << i << " ";
-            }
-            cerr << endl;
-        }
-        cerr << "EDGE" << endl;
-        for (auto& edge_record : edge_index) {
-            cerr << "\t" << get<0>(edge_record.first) << " " << get<1>(edge_record.first) << " " << get<2>(edge_record.first) << " " << get<3>(edge_record.first) << "\t\t" << edge_record.second << endl;
-        }
-        cerr << "GRAPH" << endl;
-        for (int i = 0; i < graph.node_size(); i++) {
-            cerr << i << " " << pb2json(graph.node(i)) << endl;
-        }
-        for (int i = 0; i < graph.edge_size(); i++) {
-            cerr << i << " " << pb2json(graph.edge(i)) << endl;
-        }
-    };
     // using a map instead of a set ensures a stable sort across different systems
     map<id_t, NodeTraversal> s;
 
@@ -8409,7 +8373,6 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
         }
 
         while (!s.empty()) {
-            print_indexes();
             // Grab an oriented node
             NodeTraversal n = s.begin()->second;
             s.erase(n.node->id());
@@ -8424,11 +8387,8 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
             // where both were picked as places to break into cycles. A
             // reversing self loop on a cycle entry point is a special case of
             // this.
-            cerr << "get nodes prev" << endl;
-            cerr << "index of node 10 is " << get<0>(node_index[10]) << endl;
             vector<NodeTraversal> prev;
             nodes_prev(n, prev);
-            cerr << "finished getting nodes prev" << endl;
             for(NodeTraversal& prev_node : prev) {
                 if(!unvisited.count(prev_node.node->id())) {
 #ifdef debug
@@ -8447,20 +8407,16 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
                 }
             }
             
-            cerr << "get nodes next" << endl;
-
             // All other connections and self loops are handled by looking off the right side.
 
             // See what all comes next, minus deleted edges.
             vector<NodeTraversal> next;
             nodes_next(n, next);
-            cerr << "finishes getting nodes next" << endl;
             for(NodeTraversal& next_node : next) {
-
-#ifdef debug
-#pragma omp critical (cerr)
-                cerr << "\tHas edge to " << next_node.node->id() << " orientation " << next_node.backward << endl;
-#endif
+//#ifdef debug
+//#pragma omp critical (cerr)
+//                cerr << "\tHas edge to " << next_node.node->id() << " orientation " << next_node.backward << endl;
+//#endif
 
                 // Unindex the edge connecting these nodes in this order and
                 // relative orientation, so we can't traverse it with

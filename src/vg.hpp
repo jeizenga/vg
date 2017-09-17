@@ -1360,6 +1360,8 @@ public:
 
 
 private:
+    
+    void print_indexes(void);
 
     void init(void); ///< setup, ensures that gssw == NULL on startup
     /// Placeholder for functions that sometimes need to be passed an empty vector
