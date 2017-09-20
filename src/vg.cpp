@@ -4,7 +4,8 @@
 #include <raptor2/raptor2.h>
 #include <stPinchGraphs.h>
 
-#define debug
+//#define debug
+//#define debug_divide
 
 namespace vg {
 
@@ -419,12 +420,16 @@ vector<pair<id_t, bool>> VG::edges_start(id_t id) {
     for (int i : get<1>(node_index[id])) {
         const Edge& edge = graph.edge(i);
         if (edge.from() == id && edge.from_start()) {
-            to_return.push_back(make_pair(edge.to(), edge.to_end()));
+            to_return.push_back(make_pair(edge.to(), !edge.to_end()));
         }
         else {
-            to_return.push_back(make_pair(edge.from(), !edge.from_start()));
+            to_return.push_back(make_pair(edge.from(), edge.from_start()));
         }
     }
+    //cerr << "returning edges on start of " << id << " to:" << endl;
+    //for (auto e : to_return) {
+    //    cerr << "\t" << e.first << " " << (e.second ? "rev" : "fwd") << endl;
+    //}
     return to_return;
 }
 
@@ -449,6 +454,10 @@ vector<pair<id_t, bool>> VG::edges_end(id_t id) {
             to_return.push_back(make_pair(edge.from(), !edge.from_start()));
         }
     }
+    //cerr << "returning edges on end of " << id << " to:" << endl;
+    //for (auto e : to_return) {
+    //    cerr << "\t" << e.first << " " << (e.second ? "rev" : "fwd") << endl;
+    //}
     return to_return;
 }
 
@@ -1351,7 +1360,6 @@ void VG::flip_doubly_reversed_edges(void) {
                 e->set_from(f);
             }
         });
-    rebuild_edge_index();
 }
 
 // by definition, we can merge nodes that are a "simple component"
@@ -1448,8 +1456,17 @@ void VG::remove_non_path(void) {
                 non_path_edges.insert(e);
             }
         });
+    
+    // convert away from pointers so that they don't get invalidated once
+    // we start changing the underlying graph
+    vector<pair<NodeSide, NodeSide>> nodesides_of_non_path_edges;
+    nodesides_of_non_path_edges.reserve(non_path_edges.size());
+    for (Edge* e : non_path_edges) {
+        nodesides_of_non_path_edges.push_back(NodeSide::pair_from_edge(e));
+    }
+    
     // and destroy them
-    for (auto* e : non_path_edges) {
+    for (auto& e : nodesides_of_non_path_edges) {
         destroy_edge(e);
     }
 
@@ -1469,8 +1486,16 @@ void VG::remove_path(void) {
     // Determine which edges are used
     set<Edge*> path_edges(get_path_edges());
     
+    // convert away from pointers so that they don't get invalidated once
+    // we start changing the underlying graph
+    vector<pair<NodeSide, NodeSide>> nodesides_of_path_edges;
+    nodesides_of_path_edges.reserve(path_edges.size());
+    for (Edge* e : path_edges) {
+        nodesides_of_path_edges.push_back(NodeSide::pair_from_edge(e));
+    }
+    
     // and destroy them
-    for (auto* e : path_edges) {
+    for (auto& e : nodesides_of_path_edges) {
         destroy_edge(e);
     }
 
@@ -1574,7 +1599,6 @@ bool VG::nodes_are_perfect_path_neighbors(NodeTraversal left, NodeTraversal righ
 // changing the path space of the graph
 // respects stored paths
 set<list<NodeTraversal>> VG::simple_components(int min_size) {
-
     // go around and establish groupings
     set<Node*> seen;
     set<list<NodeTraversal>> components;
@@ -1843,7 +1867,7 @@ Node* VG::concat_nodes(const list<NodeTraversal>& nodes) {
     }
     
     for (auto next : nodes_next(nodes.back())) {
-    
+        
         if (next.node == nodes.back().node) {
             // This is going to become a reversing self loop.
             
@@ -1869,9 +1893,16 @@ Node* VG::concat_nodes(const list<NodeTraversal>& nodes) {
     
     }
 
-    // remove the old nodes
-    for (auto n : nodes) {
-        destroy_node(n.node);
+    // collect the IDs of the nodes we want to destroy
+    vector<id_t> destroy_node_ids;
+    destroy_node_ids.reserve(nodes.size());
+    for (auto& n : nodes) {
+        destroy_node_ids.push_back(n.node->id());
+    }
+    
+    // and actually destroy them
+    for (auto node_id : destroy_node_ids) {
+        destroy_node(node_id);
     }
 
     return node;
@@ -1929,12 +1960,18 @@ id_t VG::total_length_of_nodes(void) {
 }
 
 void VG::build_node_index(void) {
+    if (!node_index.empty()) {
+        clear_node_index();
+    }
     for (int i = 0; i < graph.node_size(); ++i) {
         node_index[graph.node(i).id()] = make_tuple(i, vector<int>(), vector<int>());
     }
 }
 
 void VG::build_edge_index(void) {
+    if (!edge_index.empty()) {
+        clear_edge_index();
+    }
     for (int i = 0; i < graph.edge_size(); ++i) {
         index_edge(i);
     }
@@ -1956,18 +1993,25 @@ void VG::clear_node_index_no_resize(void) {
     clear_node_index();
 #endif
 }
+    
+void VG::clear_adjacency_index(void) {
+    if (!node_index.empty()) {
+        for (auto& node_record : node_index) {
+            get<1>(node_record.second).clear();
+            get<2>(node_record.second).clear();
+        }
+    }
+}
 
 void VG::clear_edge_index(void) {
     edge_index.clear();
-    for (auto& node_record : node_index) {
-        get<1>(node_record.second).clear();
-        get<2>(node_record.second).clear();
-    }
+    clear_adjacency_index();
 }
 
 void VG::clear_edge_index_no_resize(void) {
 #ifdef USE_DENSE_HASH
     edge_index.clear_no_resize();
+    clear_adjacency_index();
 #else
     clear_edge_index();
 #endif
@@ -2102,14 +2146,14 @@ void VG::remove_duplicated_in(VG& g) {
             edges_to_destroy.push_back(e);
         }
     }
-    for (vector<Node*>::iterator n = nodes_to_destroy.begin();
-         n != nodes_to_destroy.end(); ++n) {
-        g.destroy_node(g.get_node((*n)->id()));
+    
+    for (Node* n : nodes_to_destroy) {
+        g.destroy_node(n->id());
     }
-    for (vector<Edge*>::iterator e = edges_to_destroy.begin();
-         e != edges_to_destroy.end(); ++e) {
+    
+    for (Edge* e : edges_to_destroy) {
         // Find and destroy the edge that does the same thing in g.
-        destroy_edge(g.get_edge(NodeSide::pair_from_edge(*e)));
+        g.destroy_edge(NodeSide::pair_from_edge(e));
     }
 }
 
@@ -2138,20 +2182,20 @@ void VG::remove_duplicates(void) {
     for (id_t i = 0; i < graph.edge_size(); ++i) {
         edge_counts[NodeSide::pair_from_edge(graph.edge(i))]++;
     }
-    vector<Edge*> edges_to_destroy;
+    vector<pair<NodeSide, NodeSide>> edges_to_destroy;
     for (id_t i = 0; i < graph.edge_size(); ++i) {
         Edge* e = graph.mutable_edge(i);
-        auto f = edge_counts.find(NodeSide::pair_from_edge(*e));
+        auto pair_edge = NodeSide::pair_from_edge(*e);
+        auto f = edge_counts.find(pair_edge);
         if (f != edge_counts.end()
             && f->second > 1) {
             --f->second;
-            edges_to_destroy.push_back(e);
+            edges_to_destroy.push_back(pair_edge);
         }
     }
-    for (vector<Edge*>::iterator e = edges_to_destroy.begin();
-         e != edges_to_destroy.end(); ++e) {
+    for (auto iter = edges_to_destroy.begin(); iter != edges_to_destroy.end(); iter++) {
         // Find and destroy the edge that does the same thing in g.
-        destroy_edge(get_edge(NodeSide::pair_from_edge(*e)));
+        destroy_edge(*iter);
     }
 }
 
@@ -2462,7 +2506,6 @@ void VG::from_gfa(istream& in, bool showp) {
 
     map<string, sequence_elem, custom_key> name_to_seq = gg.get_name_to_seq();
     map<std::string, vector<link_elem> > seq_to_link = gg.get_seq_to_link();
-    map<string, sequence_elem>::iterator it;
     id_t curr_id = 1;
     map<string, id_t> id_names;
     std::function<id_t(const string&)> get_add_id = [&](const string& name) -> id_t {
@@ -2478,7 +2521,7 @@ void VG::from_gfa(istream& in, bool showp) {
             }
         }
     };
-    for (it = name_to_seq.begin(); it != name_to_seq.end(); it++){
+    for (auto it = name_to_seq.begin(); it != name_to_seq.end(); it++){
         auto source_id = get_add_id((it->second).name);
         //Make us some nodes
         Node n;
@@ -2486,6 +2529,9 @@ void VG::from_gfa(istream& in, bool showp) {
         n.set_id(source_id);
         n.set_name((it->second).name);
         add_node(n);
+    }
+    for (auto it = name_to_seq.begin(); it != name_to_seq.end(); it++){
+        auto source_id = get_add_id((it->second).name);
         // Now some edges. Since they're placed in this map
         // by their from_node, it's no big deal to just iterate
         // over them.
@@ -2501,8 +2547,8 @@ void VG::from_gfa(istream& in, bool showp) {
             if (cigar_elems.size() == 1
                 && cigar_elems.front().first > 0
                 && cigar_elems.front().second == "M") {
-                    reduce_overlaps = true;
-                    e.set_overlap(cigar_elems.front().first);
+                reduce_overlaps = true;
+                e.set_overlap(cigar_elems.front().first);
             }
             add_edge(e);
         }
@@ -2546,7 +2592,7 @@ void VG::bluntify(void) {
     // First we have to validate the overlaps claimed by the edges.
 
     // We populate this with edges with incorrect overlaps that we want to delete.
-    set<Edge*> bad_edges;
+    set<pair<NodeSide, NodeSide>> bad_edges;
     for_each_edge([&](Edge* edge) {
         if (edge->overlap() > 0) {
 #ifdef debug
@@ -2585,7 +2631,7 @@ void VG::bluntify(void) {
                          << "aln: " << pb2json(aln) << endl;
                     
                     // Drop the edge
-                    bad_edges.insert(edge);
+                    bad_edges.insert(NodeSide::pair_from_edge(edge));
                 }
 
             } else {
@@ -2596,7 +2642,9 @@ void VG::bluntify(void) {
         }
     });
     
-    for (auto* edge : bad_edges) {
+    
+    
+    for (auto& edge : bad_edges) {
         // Drop all the edges with incorrect overlaps
         destroy_edge(edge);
     }
@@ -2618,11 +2666,11 @@ void VG::bluntify(void) {
     }; 
     
     // We fill this with the nodes we're going to replace.
-    set<Node*> overlapped_nodes;
+    unordered_set<id_t> overlapped_nodes;
     
     // And this with the overlap edges which we remove from the graph (to be
     // replaced by pinching parts of nodes).
-    vector<Edge*> overlap_edges; 
+    vector<pair<NodeSide, NodeSide>> overlap_edges;
     
     for_each_edge([&](Edge* edge) {
         // Now loop over only the real edges
@@ -2639,8 +2687,8 @@ void VG::bluntify(void) {
             Node* right_node = get_node(right.node);
             
             // Mark them overlapped
-            overlapped_nodes.insert(left_node);
-            overlapped_nodes.insert(right_node);
+            overlapped_nodes.insert(left_node->id());
+            overlapped_nodes.insert(right_node->id());
         
             // Grab both the nodes' threads from the pinch graph
             auto* left_thread = obtain_thread(left_node);
@@ -2671,14 +2719,14 @@ void VG::bluntify(void) {
 #endif
 
             // Remember to remove the edge from the graph
-            overlap_edges.push_back(edge);
+            overlap_edges.emplace_back(left, right);
             
         }
     });
     
     // Remove all the overlap edges from the graph, since we represent them with
     // stuff coming back from the pinch graph.
-    for (auto* edge : overlap_edges) {
+    for (auto& edge : overlap_edges) {
         destroy_edge(edge);
     }
     
@@ -2804,7 +2852,7 @@ void VG::bluntify(void) {
     // Now clean up the pinch thread set. This invalidates all the pointers we got from it.
     stPinchThreadSet_destruct(pinch_graph);
     
-    for (auto* node : overlapped_nodes) {
+    for (auto node : overlapped_nodes) {
         // Then finally we go through all the nodes that had overlaps and remove them and their edges.
         destroy_node(node);
     }
@@ -2943,8 +2991,9 @@ void VG::print_edges(void) {
 void VG::sort(void) {
     if (size() <= 1) return;
     // Join heads to a root to ensure stable topo sort
-    cerr << "joining heads for topo sort" << endl;
-    Node* root = join_heads();
+    Node* root;
+    vector<Edge*> root_edges;
+    tie(root, root_edges) = join_heads();
     // Topologically sort, which orders and orients all the nodes.
     deque<NodeTraversal> sorted_nodes;
     topological_sort(sorted_nodes);
@@ -3246,17 +3295,17 @@ vector<Edge> VG::break_cycles(void) {
     // ensure we are sorted
     sort();
     // remove any edge whose from has a higher index than its to
-    vector<Edge*> to_remove;
+    vector<pair<NodeSide, NodeSide>> to_remove;
+    vector<Edge> removed;
     for_each_edge([&](Edge* e) {
             // if we cycle to this node or one before in the sort
             if (node_rank(e->from()) >= node_rank(e->to())) {
-                to_remove.push_back(e);
+                to_remove.push_back(NodeSide::pair_from_edge(e));
+                removed.push_back(*e);
             }
         });
-    vector<Edge> removed;
-    for(Edge* edge : to_remove) {
+    for(auto& edge : to_remove) {
         //cerr << "removing " << pb2json(*edge) << endl;
-        removed.push_back(*edge);
         destroy_edge(edge);
     }
     sort();
@@ -3454,20 +3503,43 @@ void VG::destroy_edge(const pair<NodeSide, NodeSide>& sides) {
 
 
 void VG::destroy_edge(Edge* edge) {
-    //cerr << "destroying edge " << edge->from() << "->" << edge->to() << endl;
 
     // noop on NULL pointer or non-existent edge
     if (!has_edge(edge)) { return; }
-
+    
     unindex_edge_for_traversal(edge);
     
     auto key = canonical_edge_key(*edge);
     int idx = edge_index[key];
     edge_index.erase(key);
     std::swap(*graph.mutable_edge(idx), *graph.mutable_edge(graph.edge_size() - 1));
-    graph.mutable_edge()->RemoveLast();
+    graph.mutable_edge()->ReleaseLast();
+    
+    // update the index of the edge we swapped into this position (unless this edge was the last one
+    // in the array, so no swap actually took place)
     if (idx < graph.edge_size()) {
-        edge_index[canonical_edge_key(graph.edge(idx))] = idx;
+        const Edge& swapped_edge = graph.edge(idx);
+        edge_index[canonical_edge_key(swapped_edge)] = idx;
+        
+        vector<int>& from_idxs = swapped_edge.from_start() ? get<1>(node_index[swapped_edge.from()]) : get<2>(node_index[swapped_edge.from()]);
+        for (int i = 0; i < from_idxs.size(); i++) {
+            if (from_idxs[i] == graph.edge_size()) {
+                from_idxs[i] = idx;
+                break;
+            }
+        }
+        
+        if (swapped_edge.from() == swapped_edge.to() && swapped_edge.from_start() != swapped_edge.to_end()) {
+            return;
+        }
+        
+        vector<int>& to_idxs = swapped_edge.to_end() ? get<2>(node_index[swapped_edge.to()]) : get<1>(node_index[swapped_edge.to()]);
+        for (int i = 0; i < to_idxs.size(); i++) {
+            if (to_idxs[i] == graph.edge_size()) {
+                to_idxs[i] = idx;
+                break;
+            }
+        }
     }
 }
 
@@ -3481,10 +3553,12 @@ void VG::unindex_edge_for_traversal(Edge* edge) {
     //if (!is_valid()) { cerr << "graph ain't valid" << endl; }
     // erase from indexes
     
+    auto key = canonical_edge_key(*edge);
+    
     int i;
     vector<int>& from_idxs = edge->from_start() ? get<1>(node_index[edge->from()]) : get<2>(node_index[edge->from()]);
     for (i = 0; i < from_idxs.size(); i++) {
-        if (canonical_edge_key(*edge) == canonical_edge_key(graph.edge(from_idxs[i]))) {
+        if (key == canonical_edge_key(graph.edge(from_idxs[i]))) {
             break;
         }
     }
@@ -3498,13 +3572,12 @@ void VG::unindex_edge_for_traversal(Edge* edge) {
     
     vector<int>& to_idxs = edge->to_end() ? get<2>(node_index[edge->to()]) : get<1>(node_index[edge->to()]);
     for (i = 0; i < to_idxs.size(); i++) {
-        if (canonical_edge_key(*edge) == canonical_edge_key(graph.edge(to_idxs[i]))) {
+        if (key == canonical_edge_key(graph.edge(to_idxs[i]))) {
             break;
         }
     }
     std::swap(to_idxs[i], to_idxs.back());
     to_idxs.pop_back();
-    
 }
 
 void VG::index_edge_for_traversal(Edge* edge) {
@@ -3621,19 +3694,21 @@ void VG::nonoverlapping_node_context_without_paths(Node* node, VG& g) {
     // paths must be added externally
 }
 
-void VG::destroy_node(id_t id) {
-    destroy_node(get_node(id));
+void VG::destroy_node(Node* node) {
+    if (node) {
+        destroy_node(node->id());
+    }
 }
 
-void VG::destroy_node(Node* node) {
+void VG::destroy_node(id_t id) {
     //if (!is_valid()) cerr << "graph is invalid before destroy_node" << endl;
     //cerr << "destroying node " << node->id() << " degrees " << start_degree(node) << ", " << end_degree(node) << endl;
     // noop on NULL/nonexistent node
-    if (!has_node(node)) { return; }
+    if (!has_node(id)) {
+        return;
+    }
     
-    cerr << "destroying node " << pb2json(*node) << endl;
-    
-    auto& node_record = node_index[node->id()];
+    auto& node_record = node_index[id];
     
     for (vector<int>* edge_list : {&get<1>(node_record), &get<2>(node_record)}) {
         for (int i : *edge_list) {
@@ -3642,52 +3717,82 @@ void VG::destroy_node(Node* node) {
                 continue;
             }
             const Edge& edge = graph.edge(i);
+            
             // another check that we didn't already delete this as a self edge
-            if (edge.to() != node->id() && edge.from() != node->id()) {
+            if (edge.to() != id && edge.from() != id) {
                 continue;
             }
+            
             auto key = canonical_edge_key(edge);
-            int edge_idx = edge_index[key];
             // delete the other side of this edge if it's not a self edge
             if (edge.from() != edge.to()) {
-                if (edge.from() == node->id()) {
+                if (edge.from() == id) {
                     auto& other_node_record = node_index[edge.to()];
-                    int i;
                     vector<int>& to_idxs = edge.to_end() ? get<2>(other_node_record) : get<1>(other_node_record);
-                    for (i = 0; i < to_idxs.size(); i++) {
-                        if (to_idxs[i] == edge_idx) {
+                    for (int j = 0; j < to_idxs.size(); j++) {
+                        if (to_idxs[j] == i) {
+                            std::swap(to_idxs[j], to_idxs.back());
+                            to_idxs.pop_back();
                             break;
                         }
                     }
-                    cerr << "removing edge at index " << i << " pointing to node " << edge.to() << endl;
-                    std::swap(to_idxs[i], to_idxs.back());
-                    to_idxs.pop_back();
                 }
                 else {
                     auto& other_node_record = node_index[edge.from()];
-                    int i;
                     vector<int>& from_idxs = edge.from_start() ? get<1>(other_node_record) : get<2>(other_node_record);
-                    for (i = 0; i < from_idxs.size(); i++) {
-                        if (from_idxs[i] == edge_idx) {
+                    for (int j = 0; j < from_idxs.size(); j++) {
+                        if (from_idxs[j] == i) {
+                            std::swap(from_idxs[j], from_idxs.back());
+                            from_idxs.pop_back();
                             break;
                         }
                     }
-                    cerr << "removing edge at index " << i << " pointing to node " << edge.from() << endl;
-                    std::swap(from_idxs[i], from_idxs.back());
-                    from_idxs.pop_back();
                 }
             }
+            
             // remove and unindex the edge
             std::swap(*graph.mutable_edge(i), *graph.mutable_edge(graph.edge_size() - 1));
-            graph.mutable_edge()->RemoveLast();
+            graph.mutable_edge()->ReleaseLast();
             edge_index.erase(key);
+            
+            // update the indexing of the edge we swapped into this position
+            if (i != graph.edge_size()) {
+                const Edge& swapped_edge = graph.edge(i);
+                
+                edge_index[canonical_edge_key(swapped_edge)] = i;
+                
+                auto& from_node_record = node_index[edge.from()];
+                vector<int>& from_idxs = edge.from_start() ? get<1>(from_node_record) : get<2>(from_node_record);
+                for (int j = 0; j < from_idxs.size(); j++) {
+                    if (from_idxs[j] == graph.edge_size()) {
+                        from_idxs[j] = i;
+                        break;
+                    }
+                }
+                
+                // don't update in the reverse direction if this is a reversing self loop because
+                // the update already happened in the previous step
+                if (!(swapped_edge.from() == swapped_edge.to() && swapped_edge.from_start() != swapped_edge.to_end())) {
+                    auto& to_node_record = node_index[edge.to()];
+                    vector<int>& to_idxs = edge.to_end() ? get<2>(to_node_record) : get<1>(to_node_record);
+                    for (int j = 0; j < to_idxs.size(); j++) {
+                        if (to_idxs[j] == graph.edge_size()) {
+                            to_idxs[j] = i;
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
     
     int node_idx = get<0>(node_record);
-    node_index.erase(node->id());
+    node_index.erase(id);
     std::swap(*graph.mutable_node(node_idx), *graph.mutable_node(graph.node_size() - 1));
-    graph.mutable_node()->RemoveLast();
+    graph.mutable_node()->ReleaseLast();
+    if (node_idx != graph.node_size()) {
+        get<0>(node_index[graph.node(node_idx).id()]) = node_idx;
+    }
 }
 
 void VG::remove_null_nodes(void) {
@@ -3771,7 +3876,7 @@ void VG::remove_orphan_edges(void) {
                 edges.insert(NodeSide::pair_from_edge(edge));
             }
         });
-    for (auto edge : edges) {
+    for (auto& edge : edges) {
         destroy_edge(edge);
     }
 }
@@ -3823,7 +3928,7 @@ void VG::divide_node(Node* node, int pos, Node*& left, Node*& right) {
     right = parts.back();
 }
 
-void VG::divide_node(Node* node, vector<int> positions, vector<Node*>& parts) {
+void VG::divide_node(Node* node, vector<int>& positions, vector<Node*>& parts) {
 
 #ifdef debug_divide
 #pragma omp critical (cerr)
@@ -3844,7 +3949,7 @@ void VG::divide_node(Node* node, vector<int> positions, vector<Node*>& parts) {
                 
                 if(node->sequence().size() <= 1000) {
                     // Add sequences for short nodes
-                    cerr << ":" << node->sequence();
+                    cerr <<  ":" << node->sequence();
                 }
                 
                 cerr << " -- position (" << pos << ") is less than 0 or greater than sequence length ("
@@ -3853,24 +3958,27 @@ void VG::divide_node(Node* node, vector<int> positions, vector<Node*>& parts) {
             }
         }
     }
-
+    
     int last_pos = 0;
+    vector<id_t> new_node_ids;
     for(auto pos : positions) {
         // Make all the nodes ending at the given positions, grabbing the appropriate substrings
         Node* new_node = create_node(node->sequence().substr(last_pos, pos - last_pos));
         last_pos = pos;
-        parts.push_back(new_node);
+        new_node_ids.push_back(new_node->id());
     }
 
     // Make the last node with the remaining sequence
     Node* last_node = create_node(node->sequence().substr(last_pos));
-    parts.push_back(last_node);
+    new_node_ids.push_back(last_node->id());
+    
 
 #ifdef debug_divide
 
 #pragma omp critical (cerr)
     {
-        for(auto* part : parts) {
+        for(id_t node_id : new_node_ids) {
+            Node* part = get_node(node_id);
             cerr << "\tCreated node " << part->id() << " (" << part->sequence().size() << ")";
             if(part->sequence().size() <= 1000) {
                 // Add sequences for short nodes
@@ -3881,12 +3989,12 @@ void VG::divide_node(Node* node, vector<int> positions, vector<Node*>& parts) {
     }
 
 #endif
-
+    
     // Our leftmost new node is now parts.front(), and our rightmost parts.back()
 
     // Create edges between the left node (optionally its start) and the right node (optionally its end)
     set<pair<pair<id_t, bool>, pair<id_t, bool>>> edges_to_create;
-
+    
     // replace the connections to the node's start
     for(auto e : edges_start(node)) {
         // We have to check for self loops, as these will be clobbered by the division of the node
@@ -3894,16 +4002,16 @@ void VG::divide_node(Node* node, vector<int> positions, vector<Node*>& parts) {
             // if it's a reversed edge, it would be from the start of this node
             if (e.second) {
                 // so set it to the front node
-                e.first = parts.front()->id();
+                e.first = new_node_ids.front();
             } else {
                 // otherwise, it's from the end, so set it to the back node
-                e.first = parts.back()->id();
+                e.first = new_node_ids.back();
             }
         }
         // Make an edge to the left node's start from wherever this edge went.
-        edges_to_create.emplace(make_pair(e.first, e.second), make_pair(parts.front()->id(), false));
+        edges_to_create.emplace(make_pair(e.first, e.second), make_pair(new_node_ids.front(), false));
     }
-
+    
     // replace the connections to the node's end
     for(auto e : edges_end(node)) {
         // We have to check for self loops, as these will be clobbered by the division of the node
@@ -3911,27 +4019,28 @@ void VG::divide_node(Node* node, vector<int> positions, vector<Node*>& parts) {
             // if it's a reversed edge, it would be to the start of this node
             if (e.second) {
                 // so set it to the back node
-                e.first = parts.back()->id();
+                e.first = new_node_ids.back();
             } else {
                 // otherwise, it's to the start, so set it to the front node
-                e.first = parts.front()->id();
+                e.first = new_node_ids.front();
             }
         }
         // Make an edge from the right node's end to wherever this edge went.
-        edges_to_create.emplace(make_pair(parts.back()->id(), false), make_pair(e.first, e.second));
+        edges_to_create.emplace(make_pair(new_node_ids.back(), false), make_pair(e.first, e.second));
     }
-
+    
+    
     // create the edges here as otherwise we will invalidate the iterators
     for (auto& e : edges_to_create) {
         // Swizzle the from_start and to_end bits to the right place.
         create_edge(e.first.first, e.second.first, e.first.second, e.second.second);
     }
 
-    for(int i = 0; i < parts.size() - 1; i++) {
+    for(int i = 0; i < new_node_ids.size() - 1; i++) {
         // Connect all the new parts left to right. These edges always go from end to start.
-        create_edge(parts[i], parts[i+1]);
+        create_edge(new_node_ids[i], new_node_ids[i+1]);
     }
-
+    
     // divide paths
     // note that we can't do this (yet) for non-exact matching paths
     if (paths.has_node_mapping(node)) {
@@ -3991,7 +4100,7 @@ void VG::divide_node(Node* node, vector<int> positions, vector<Node*>& parts) {
 
                 // Tell it what it's mapping to
                 // We'll take all of this node.
-                chunk.mutable_position()->set_node_id(parts[i]->id());
+                chunk.mutable_position()->set_node_id(new_node_ids[i]);
                 chunk.mutable_position()->set_offset(0);
 
                 mapping_parts.push_back(chunk);
@@ -4002,7 +4111,7 @@ void VG::divide_node(Node* node, vector<int> positions, vector<Node*>& parts) {
             }
             // Place the last part of the mapping.
             // It takes all of the last node.
-            remainder.mutable_position()->set_node_id(parts.back()->id());
+            remainder.mutable_position()->set_node_id(new_node_ids.back());
             remainder.mutable_position()->set_offset(0);
             mapping_parts.push_back(remainder);
 
@@ -4036,7 +4145,10 @@ void VG::divide_node(Node* node, vector<int> positions, vector<Node*>& parts) {
     }
 
     destroy_node(node);
-
+    
+    for (id_t node_id : new_node_ids) {
+        parts.push_back(get_node(node_id));
+    }
 }
 
 // for dividing a path of nodes with an underlying coordinate system
@@ -4099,7 +4211,7 @@ void VG::nodes_prev(NodeTraversal node, vector<NodeTraversal>& nodes) {
     for (auto& prev : left_nodes) {
         // Make a NodeTraversal that is an oriented description of the node attached to our relative left.
         // If we're backward, and it's in the same relative orientation as us, it needs to be backward too.
-        nodes.emplace_back(get_node(prev.first), prev.second);
+        nodes.emplace_back(get_node(prev.first), prev.second != node.backward);
     }
 }
 
@@ -4116,7 +4228,7 @@ void VG::nodes_next(NodeTraversal node, vector<NodeTraversal>& nodes) {
     for (auto& next : right_nodes) {
         // Make a NodeTraversal that is an oriented description of the node attached to our relative right.
         // If we're backward, and it's in the same relative orientation as us, it needs to be backward too.
-        nodes.emplace_back(get_node(next.first), next.second);
+        nodes.emplace_back(get_node(next.first), next.second != node.backward);
     }
 }
 
@@ -6266,50 +6378,60 @@ void VG::to_turtle(ostream& out, const string& rdf_base_uri, bool precompress) {
     }
 }
 
-void VG::connect_node_to_nodes(Node* node, vector<Node*>& nodes, bool from_start) {
+vector<Edge*> VG::connect_node_to_nodes(Node* node, vector<Node*>& nodes, bool from_start) {
+    vector<Edge*> to_return;
     for (vector<Node*>::iterator n = nodes.begin(); n != nodes.end(); ++n) {
         // Connect them left to right, unless instructed otherwise
-        create_edge(node, (*n), from_start, false);
+        to_return.push_back(create_edge(node, (*n), from_start, false));
     }
+    return to_return;
 }
 
-void VG::connect_nodes_to_node(vector<Node*>& nodes, Node* node, bool to_end) {
+vector<Edge*> VG::connect_nodes_to_node(vector<Node*>& nodes, Node* node, bool to_end) {
+    vector<Edge*> to_return;
     for (vector<Node*>::iterator n = nodes.begin(); n != nodes.end(); ++n) {
         // Connect them left to right, unless instructed otherwise
-        create_edge((*n), node, false, to_end);
+        to_return.push_back(create_edge((*n), node, false, to_end));
     }
+    return to_return;
 }
 
-void VG::connect_node_to_nodes(NodeTraversal node, vector<NodeTraversal>& nodes) {
+vector<Edge*> VG::connect_node_to_nodes(NodeTraversal node, vector<NodeTraversal>& nodes) {
+    vector<Edge*> to_return;
     for (vector<NodeTraversal>::iterator n = nodes.begin(); n != nodes.end(); ++n) {
         // Connect them left to right
-        create_edge(node, (*n));
+        to_return.push_back(create_edge(node, (*n)));
     }
+    return to_return;
 }
 
-void VG::connect_nodes_to_node(vector<NodeTraversal>& nodes, NodeTraversal node) {
+vector<Edge*> VG::connect_nodes_to_node(vector<NodeTraversal>& nodes, NodeTraversal node) {
+    vector<Edge*> to_return;
     for (vector<NodeTraversal>::iterator n = nodes.begin(); n != nodes.end(); ++n) {
         // Connect them left to right
-        create_edge((*n), node);
+        to_return.push_back(create_edge((*n), node));
     }
+    return to_return;
 }
 
 // join all subgraphs together to a "null" head node
-Node* VG::join_heads(void) {
+pair<Node*, vector<Edge*>> VG::join_heads(void) {
     // Find the head nodes
     vector<Node*> heads;
     head_nodes(heads);
 
+    pair<Node*, vector<Edge*>> to_return;
+    
     // Then create the new node (so it isn't picked up as a head)
     current_id = max_node_id()+1;
-    Node* root = create_node("N");
+    to_return.first = create_node("N");
 
     // Wire it to all the heads and return
-    connect_node_to_nodes(root, heads);
-    return root;
+    to_return.second = connect_node_to_nodes(to_return.first, heads);
+    return to_return;
 }
 
-void VG::join_heads(Node* node, bool from_start) {
+vector<Edge*> VG::join_heads(Node* node, bool from_start) {
     vector<Node*> heads;
     head_nodes(heads);
 
@@ -6321,10 +6443,10 @@ void VG::join_heads(Node* node, bool from_start) {
         }
     }
 
-    connect_node_to_nodes(node, heads, from_start);
+    return connect_node_to_nodes(node, heads, from_start);
 }
 
-void VG::join_tails(Node* node, bool to_end) {
+vector<Edge*> VG::join_tails(Node* node, bool to_end) {
     vector<Node*> tails;
     tail_nodes(tails);
 
@@ -6336,7 +6458,7 @@ void VG::join_tails(Node* node, bool to_end) {
         }
     }
 
-    connect_nodes_to_node(tails, node, to_end);
+    return connect_nodes_to_node(tails, node, to_end);
 }
 
 void VG::add_start_end_markers(int length,
@@ -6516,7 +6638,7 @@ Alignment VG::align(const Alignment& alignment,
                     size_t band_padding_override,
                     size_t max_span,
                     bool print_score_matrices) {
-
+    
     auto aln = alignment;
 
     // empty graph means unaligned
@@ -8247,12 +8369,12 @@ void VG::print_indexes(void) {
     cerr << endl << "NODE" << endl;
     for (auto& node_record : node_index) {
         cerr << "\t" << node_record.first << "\t" << get<0>(node_record.second) << endl;
-        cerr << "\t\tstart: ";
+        cerr << "\t\tstart:\t";
         for (int i : get<1>(node_record.second)) {
             cerr << i << " ";
         }
         cerr << endl;
-        cerr << "\t\tend: ";
+        cerr << "\t\tend:\t";
         for (int i : get<2>(node_record.second)) {
             cerr << i << " ";
         }
@@ -8327,12 +8449,15 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
     // and remove index entries from it when we visit nodes. It will be rebuilt
     // when we rebuild the indexes later. We know its order will be fixed across
     // systems.
-    unordered_map<id_t, Node*> unvisited;
+    map<id_t, Node*> unvisited;
     // Fill it in, we can't use the copy constructor since std::map doesn't speak vg::hash_map
     // TODO: is the vg::hash_map order fixed across systems?
     for_each_node([&](Node* node) {
             unvisited[node->id()] = node;
         });
+    
+    // to keep track of which edges we've already traversed
+    unordered_set<Edge*> visited_edges;
 
     // How many nodes have we ordered and oriented?
     id_t seen = 0;
@@ -8397,13 +8522,13 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
                          << " orientation " << prev_node.backward << endl;
 #endif
 
-                    // Unindex it
                     Edge* bad_edge = get_edge(prev_node, n);
 #ifdef debug
 #pragma omp critical (cerr)
                     cerr << "\t\tEdge: " << bad_edge << endl;
 #endif
-                    unindex_edge_for_traversal(bad_edge);
+                    // mark it visited
+                    visited_edges.insert(bad_edge);
                 }
             }
             
@@ -8425,13 +8550,16 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
                 // Grab the edge
                 Edge* edge = get_edge(n, next_node);
 
+                if (visited_edges.count(edge)) {
+                    continue;
+                }
 #ifdef debug
 #pragma omp critical (cerr)
                 cerr << "\t\tEdge: " << edge << endl;
 #endif
-
-                // Unindex it
-                unindex_edge_for_traversal(edge);
+                
+                // mark it visited
+                visited_edges.insert(edge);
 
                 if(unvisited.count(next_node.node->id())) {
                     // We haven't already started here as an arbitrary cycle entry point
@@ -8473,8 +8601,7 @@ void VG::topological_sort(deque<NodeTraversal>& l) {
 #endif
                 }
             }
-            cerr << "update progress" << endl;
-
+            
             // The caller may put us in a progress context with the denominator
             // being the number of nodes in the graph.
             update_progress(seen);
@@ -8892,7 +9019,7 @@ VG VG::dagify(uint32_t expand_scc_steps,
               unordered_map<id_t, pair<id_t, bool> >& node_translation,
               size_t target_min_walk_length,
               size_t component_length_max) {
-
+    
     VG dag;
     // Find the strongly connected components in the graph.
     set<set<id_t>> strong_components = strongly_connected_components();
@@ -9072,6 +9199,7 @@ VG VG::dagify(uint32_t expand_scc_steps,
     // ensure normalized edges in output; we may introduced flipped/flipped edges
     // which are valid but can introduce problems for some algorithms
     dag.flip_doubly_reversed_edges();
+    
     return dag;
 }
 // Unrolls the graph into a tree in which loops are "unrolled" into new nodes

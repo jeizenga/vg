@@ -103,10 +103,7 @@ TEST_CASE("sites can be found with Cactus", "[genotype]") {
     VG graph;
     Graph chunk;
     json2pb(chunk, graph_json.c_str(), graph_json.size());
-    cerr << pb2json(chunk) << endl;
     graph.merge(chunk);
-    cerr << pb2json(graph.graph) << endl;
-    
     
     // Make a CactusUltrabubbleFinder
     SnarlFinder* finder = new CactusUltrabubbleFinder(graph, "hint");

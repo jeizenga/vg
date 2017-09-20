@@ -19,7 +19,6 @@ std::unique_ptr< list<NodeTraversal> >  FlowSort::max_flow_sort(const string& re
     if (vg.size() <= 1) return sorted_nodes;
     // Topologically sort, which orders and orients all the nodes.
     
-    
     vg.paths.sort_by_mapping_rank();
     
     flow_sort_nodes(*sorted_nodes, ref_name, isGrooming);

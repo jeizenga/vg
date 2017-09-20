@@ -108,7 +108,7 @@ ref	5	rs1337	A	G	29	PASS	.	GT	0/1
     VariantAdder adder(graph);
     // Add the variants to the graph
     adder.add_variants(&vcf);
-
+    
     SECTION("the graph should have 4 nodes") {
         REQUIRE(graph.size() == 4);
     }
@@ -237,9 +237,9 @@ ref	5	rs1337	AAAAAAAAAAAAAAAAAAAAA	A	29	PASS	.	GT	0/1
     }
     
     SECTION ("should work when the graph is atomized") {
-    
+
         graph.dice_nodes(1);
-    
+
         // Make a VariantAdder
         VariantAdder adder(graph);
         // Add the variants to the graph

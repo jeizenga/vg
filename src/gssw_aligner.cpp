@@ -938,7 +938,7 @@ void Aligner::align_pinned_multi(Alignment& alignment, vector<Alignment>& alt_al
 
 void Aligner::align_global_banded(Alignment& alignment, Graph& g,
                                   int32_t band_padding, bool permissive_banding) {
-    
+        
     // We need to figure out what size ints we need to use.
     // Get upper and lower bounds on the scores. TODO: if these overflow int64 we're out of luck
     int64_t best_score = alignment.sequence().size() * match;

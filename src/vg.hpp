@@ -333,6 +333,7 @@ public:
     void index_paths(void);
     void clear_node_index(void);
     void clear_node_index_no_resize(void);
+    void clear_adjacency_index(void);
     void clear_edge_index(void);
     void clear_edge_index_no_resize(void);
     void clear_indexes(void);
@@ -605,6 +606,8 @@ public:
     /// attached to them in the final graph.
     void expand_context_by_length(VG& g, size_t length, bool add_paths = true,
         bool reflect = false, const set<NodeSide>& barriers = set<NodeSide>());
+    
+    /// NOTE: destroying nodes invalidates existing Node and Edge pointers
     /// Destroy the node at the given pointer. This pointer must point to a Node owned by the graph.
     void destroy_node(Node* node);
     /// Destroy the node with the given ID.
@@ -749,7 +752,9 @@ public:
     Edge* get_edge(const pair<NodeSide, NodeSide>& sides);
     /// Get the edge connecting the given oriented nodes in the given order.
     Edge* get_edge(const NodeTraversal& left, const NodeTraversal& right);
-    /// Festroy the edge at the given pointer. This pointer must point to an edge owned by the graph.
+    
+    /// NOTE: destroying edges invalidates existing Edge pointers
+    /// Destroy the edge at the given pointer. This pointer must point to an edge owned by the graph.
     void destroy_edge(Edge* edge);
     /// Destroy the edge between the given sides of nodes. These can be in either order.
     void destroy_edge(const NodeSide& side1, const NodeSide& side2);
@@ -796,16 +801,16 @@ public:
     void circularize(vector<string> pathnames);
     /// Connect node -> nodes.
     /// Connects from the right side of the first to the left side of the second.
-    void connect_node_to_nodes(NodeTraversal node, vector<NodeTraversal>& nodes);
+    vector<Edge*> connect_node_to_nodes(NodeTraversal node, vector<NodeTraversal>& nodes);
     /// Connect node -> nodes.
     /// You can optionally use the start of the first node instead of the end.
-    void connect_node_to_nodes(Node* node, vector<Node*>& nodes, bool from_start = false);
+    vector<Edge*> connect_node_to_nodes(Node* node, vector<Node*>& nodes, bool from_start = false);
     /// connect nodes -> node.
     /// Connects from the right side of the first to the left side of the second.
-    void connect_nodes_to_node(vector<NodeTraversal>& nodes, NodeTraversal node);
+    vector<Edge*> connect_nodes_to_node(vector<NodeTraversal>& nodes, NodeTraversal node);
     /// connect nodes -> node.
     // You can optionally use the end of the second node instead of the start.
-    void connect_nodes_to_node(vector<Node*>& nodes, Node* node, bool to_end = false);
+    vector<Edge*> connect_nodes_to_node(vector<Node*>& nodes, Node* node, bool to_end = false);
 
     // utilities
     // These only work on forward nodes.
@@ -815,7 +820,7 @@ public:
     /// re-calculated by the caller.
     void divide_node(Node* node, int pos, Node*& left, Node*& right);
     /// Divide a node at a given internal position. This version works on a collection of internal positions, in linear time.
-    void divide_node(Node* node, vector<int> positions, vector<Node*>& parts);
+    void divide_node(Node* node, vector<int>& positions, vector<Node*>& parts);
     /// Divide a path at a position. Also invalidates stored rank information.
     void divide_path(map<long, id_t>& path, long pos, Node*& left, Node*& right);
     //void node_replace_prev(Node* node, Node* before, Node* after);
@@ -1304,11 +1309,11 @@ public:
     void collect_subgraph(Node* node, set<Node*>& subgraph);
 
     /// Join head nodes of graph to common null node, creating a new single head.
-    Node* join_heads(void);
+    pair<Node*, vector<Edge*>> join_heads(void);
     /// Join head nodes of graph to specified node. Optionally from the start/to the end of the new node.
-    void join_heads(Node* node, bool from_start = false);
+    vector<Edge*> join_heads(Node* node, bool from_start = false);
     /// Join tail nodes of graph to specified node. Optionally from the start/to the end of the new node.
-    void join_tails(Node* node, bool to_end = false);
+    vector<Edge*> join_tails(Node* node, bool to_end = false);
 
     /// Add singular head and tail null nodes to graph.
     void wrap_with_null_nodes(void);
@@ -1357,11 +1362,11 @@ public:
             , seq(seq)
             , name(name) { };
     };
-
+    
+    void print_indexes(void);
 
 private:
     
-    void print_indexes(void);
 
     void init(void); ///< setup, ensures that gssw == NULL on startup
     /// Placeholder for functions that sometimes need to be passed an empty vector
