@@ -668,6 +668,7 @@ pair<size_t, size_t> Simplifier::simplify_once(size_t iteration) {
                                                 to_node_traversal(leaf->end(), graph)));
         }
         
+        set<pair<NodeSide, NodeSide>> edges_to_destroy;
         for (auto* edge : edges) {
             if (!blessed_edges.count(edge)) {
                 // Get rid of all the edges not needed for the one true traversal
@@ -676,9 +677,13 @@ pair<size_t, size_t> Simplifier::simplify_once(size_t iteration) {
                      << to_node_traversal(leaf->end(), graph) << ": Delete edge: "
                      << pb2json(*edge) << endl;
 #endif
-                graph.destroy_edge(edge);
-                deleted_edges++;
+                edges_to_destroy.insert(NodeSide::pair_from_edge(edge));
             }
+        }
+        
+        for (auto& edge : edges_to_destroy) {
+            graph.destroy_edge(edge);
+            deleted_edges++;
         }
        
            
@@ -691,6 +696,7 @@ pair<size_t, size_t> Simplifier::simplify_once(size_t iteration) {
             blessed_nodes.insert(graph.get_node(visit.node_id()));
         }
         
+        set<id_t> nodes_to_destroy;
         for (auto* node : nodes) {
             // For every node in the site
             if (!blessed_nodes.count(node)) {
@@ -719,10 +725,14 @@ pair<size_t, size_t> Simplifier::simplify_once(size_t iteration) {
                     cerr << "warning:[vg simplify] Path " << path << " removed" << endl;
                 }
 
-                graph.destroy_node(node);
-                
-                deleted_nodes++;
+                nodes_to_destroy.insert(node->id());
             }
+        }
+        
+        for (id_t id : nodes_to_destroy) {
+            graph.destroy_node(id);
+            
+            deleted_nodes++;
         }
         
         // OK we finished a leaf

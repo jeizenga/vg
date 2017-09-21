@@ -763,7 +763,7 @@ void Aligner::align_internal(Alignment& alignment, vector<Alignment>* multi_alig
         cerr << "error:[Aligner] cannot specify maximum number of alignments in single alignment" << endl;
         exit(EXIT_FAILURE);
     }
-
+    
     // alignment pinning algorithm is based on pinning in bottom right corner, if pinning in top
     // left we need to reverse all the sequences first and translate the alignment back later
     

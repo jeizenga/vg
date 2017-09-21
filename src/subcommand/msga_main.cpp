@@ -7,6 +7,7 @@
 using namespace vg;
 using namespace vg::subcommand;
 
+//#define debug_msga
 
 void help_msga(char** argv) {
     cerr << "usage: " << argv[0] << " msga [options] >graph.vg" << endl
@@ -462,7 +463,7 @@ int main_msga(int argc, char** argv) {
         build_graph(strings[base_seq_name], base_seq_name);
     }
 
-#ifdef debug
+#ifdef debug_msga
     cerr << "path going in " << pb2json(graph->graph.path(0)) << endl;
 #endif
 
@@ -501,7 +502,7 @@ int main_msga(int argc, char** argv) {
         
         // Configure its temp directory to the system temp directory
         gcsa::TempFile::setDirectory(find_temp_dir());
-
+        
         if (edge_max) {
             VG gcsa_graph = *graph; // copy the graph
             // remove complex components
@@ -513,6 +514,7 @@ int main_msga(int argc, char** argv) {
             // if no complexity reduction is requested, just build the index
             graph->build_gcsa_lcp(gcsaidx, lcpidx, idx_kmer_size, idx_path_only, false, doubling_steps);
         }
+        
         mapper = new Mapper(xgidx, gcsaidx, lcpidx);
         { // set mapper variables
             mapper->hit_max = hit_max;
@@ -560,7 +562,7 @@ int main_msga(int argc, char** argv) {
         int iter = 0;
         auto& seq = strings[name];
         //cerr << "doing... " << name << endl;
-#ifdef debug
+#ifdef debug_msga
         {
             graph->serialize_to_file("msga-pre-" + name + ".vg");
             ofstream db_out("msga-pre-" + name + ".xg");

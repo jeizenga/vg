@@ -607,9 +607,7 @@ public:
     void expand_context_by_length(VG& g, size_t length, bool add_paths = true,
         bool reflect = false, const set<NodeSide>& barriers = set<NodeSide>());
     
-    /// NOTE: destroying nodes invalidates existing Node and Edge pointers
-    /// Destroy the node at the given pointer. This pointer must point to a Node owned by the graph.
-    void destroy_node(Node* node);
+    /// NOTE: destroying a node invalidates ALL extant Node* pointers
     /// Destroy the node with the given ID.
     void destroy_node(id_t id);
     /// Determine if the graph has a node with the given ID.
@@ -753,9 +751,7 @@ public:
     /// Get the edge connecting the given oriented nodes in the given order.
     Edge* get_edge(const NodeTraversal& left, const NodeTraversal& right);
     
-    /// NOTE: destroying edges invalidates existing Edge pointers
-    /// Destroy the edge at the given pointer. This pointer must point to an edge owned by the graph.
-    void destroy_edge(Edge* edge);
+    /// NOTE: destroying edges invalidates ALL existing Edge* pointers
     /// Destroy the edge between the given sides of nodes. These can be in either order.
     void destroy_edge(const NodeSide& side1, const NodeSide& side2);
     /// Destroy the edge between the given sides of nodes. This can take sides in any order
@@ -801,16 +797,16 @@ public:
     void circularize(vector<string> pathnames);
     /// Connect node -> nodes.
     /// Connects from the right side of the first to the left side of the second.
-    vector<Edge*> connect_node_to_nodes(NodeTraversal node, vector<NodeTraversal>& nodes);
+    void connect_node_to_nodes(NodeTraversal node, vector<NodeTraversal>& nodes);
     /// Connect node -> nodes.
     /// You can optionally use the start of the first node instead of the end.
-    vector<Edge*> connect_node_to_nodes(Node* node, vector<Node*>& nodes, bool from_start = false);
+    void connect_node_to_nodes(Node* node, vector<Node*>& nodes, bool from_start = false);
     /// connect nodes -> node.
     /// Connects from the right side of the first to the left side of the second.
-    vector<Edge*> connect_nodes_to_node(vector<NodeTraversal>& nodes, NodeTraversal node);
+    void connect_nodes_to_node(vector<NodeTraversal>& nodes, NodeTraversal node);
     /// connect nodes -> node.
     // You can optionally use the end of the second node instead of the start.
-    vector<Edge*> connect_nodes_to_node(vector<Node*>& nodes, Node* node, bool to_end = false);
+    void connect_nodes_to_node(vector<Node*>& nodes, Node* node, bool to_end = false);
 
     // utilities
     // These only work on forward nodes.
@@ -861,9 +857,9 @@ public:
     /// Makes sure that Nodes appear in the Protobuf Graph object in their topological sort order.
     void sort(void);
     /// Topological sort helper function, not really meant for external use.
-    void topological_sort(deque<NodeTraversal>& l);
-    /// Swap the nodes in the underlying Protobuf Graph, but do not maintain indexes
-    void swap_nodes_unsafely(Node* a, Node* b);
+    void topological_sort(vector<NodeTraversal>& order);
+    /// Swap the nodes in the underlying Protobuf Graph and update the index
+    void swap_nodes(Node* a, Node* b);
 
     /// Use a topological sort to order and orient the nodes, and then flip some
     /// nodes around so that they are oriented the way they are in the sort.
@@ -1309,11 +1305,11 @@ public:
     void collect_subgraph(Node* node, set<Node*>& subgraph);
 
     /// Join head nodes of graph to common null node, creating a new single head.
-    pair<Node*, vector<Edge*>> join_heads(void);
+    Node* join_heads(void);
     /// Join head nodes of graph to specified node. Optionally from the start/to the end of the new node.
-    vector<Edge*> join_heads(Node* node, bool from_start = false);
+    void join_heads(Node* node, bool from_start = false);
     /// Join tail nodes of graph to specified node. Optionally from the start/to the end of the new node.
-    vector<Edge*> join_tails(Node* node, bool to_end = false);
+    void join_tails(Node* node, bool to_end = false);
 
     /// Add singular head and tail null nodes to graph.
     void wrap_with_null_nodes(void);

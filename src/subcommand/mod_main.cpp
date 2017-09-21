@@ -594,29 +594,29 @@ int main_mod(int argc, char** argv) {
         
         // Collect all the unused nodes and edges (so we don't try to delete
         // while iterating...)
-        set<Node*> unused_nodes;
-        set<Edge*> unused_edges;
+        set<vg::id_t> unused_nodes;
+        set<pair<NodeSide, NodeSide>> unused_edges;
         
         graph->for_each_node([&](Node* n) {
             if (!called_nodes.count(n)) {
-                unused_nodes.insert(n);
+                unused_nodes.insert(n->id());
             }
         });
         
         graph->for_each_edge([&](Edge* e) {
             if (!called_edges.count(e)) {
-                unused_edges.insert(e);
+                unused_edges.insert(NodeSide::pair_from_edge(e));
             }
         });
         
         
         
         // Destroy all the extra edges (in case they use extra nodes)
-        for (auto* e : unused_edges) {
+        for (auto& e : unused_edges) {
             graph->destroy_edge(e);
         }
         
-        for (auto* n : unused_nodes) {
+        for (auto& n : unused_nodes) {
             graph->destroy_node(n);
         }
     }
