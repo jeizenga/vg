@@ -5604,7 +5604,7 @@ bool VG::is_valid(bool check_nodes,
     if (check_nodes) {
 
         if (node_index.size() != graph.node_size()) {
-            cerr << "graph invalid: node count is not equal to that found in node by-id index" << endl;
+            cerr << "graph invalid: node count " << graph.node_size() << " is not equal to that found in node by-id index " << node_index.size() << endl;
             return false;
         }
 
@@ -8048,17 +8048,21 @@ VG::build_gcsa_lcp(gcsa::GCSA*& gcsa,
 }
 
 void VG::prune_complex_with_head_tail(int path_length, int edge_max) {
+
     Node* head_node = NULL;
     Node* tail_node = NULL;
     add_start_end_markers(path_length, '#', '$', head_node, tail_node);
-    prune_complex(path_length, edge_max, head_node, tail_node);
     id_t head_id = head_node->id();
     id_t tail_id = tail_node->id();
+
+    prune_complex(path_length, edge_max, head_node, tail_node);
+    
     destroy_node(head_id);
     destroy_node(tail_id);
 }
 
 void VG::prune_complex(int path_length, int edge_max, Node* head_node, Node* tail_node) {
+    
     vector<set<NodeTraversal> > prev_maxed_nodes;
     vector<set<NodeTraversal> > next_maxed_nodes;
 #pragma omp parallel
@@ -8111,7 +8115,7 @@ void VG::prune_complex(int path_length, int edge_max, Node* head_node, Node* tai
             }
         }
 
-        // Remember to estroy the node. We might come to the same node in two directions.
+        // Remember to destroy the node. We might come to the same node in two directions.
         to_destroy.insert(node.node->id());
     }
 
@@ -8144,6 +8148,11 @@ void VG::prune_complex(int path_length, int edge_max, Node* head_node, Node* tai
         // Remember to estroy the node. We might come to the same node in two directions.
         to_destroy.insert(node.node->id());
     }
+    
+    // save IDs because destroying nodes might invalidate pointers
+    id_t head_id = head_node->id();
+    id_t tail_id = tail_node->id();
+    
     for(id_t node_id : to_destroy) {
         // Destroy all the nodes we wanted to destroy.
         if(node_id == head_node->id() || node_id == tail_node->id()) {
@@ -8164,15 +8173,15 @@ void VG::prune_complex(int path_length, int edge_max, Node* head_node, Node* tai
     }
 
     for (auto* n : head_nodes()) {
-        if (n != head_node) {
+        if (n->id() != head_id) {
             // Fix up multiple heads with a left-to-right edge
-            create_edge(head_node, n);
+            create_edge(head_id, n->id());
         }
     }
     for (auto* n : tail_nodes()) {
-        if (n != tail_node) {
+        if (n->id() != tail_id) {
             // Fix up multiple tails with a left-to-right edge
-            create_edge(n, tail_node);
+            create_edge(n->id(), tail_id);
         }
     }
 }
