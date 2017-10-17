@@ -286,8 +286,7 @@ vector<MaximalExactMatch> BaseMapper::find_mems_deep(string::const_iterator seq_
                                                      int reseed_length,
                                                      bool use_lcp_reseed_heuristic,
                                                      bool use_diff_based_fast_reseed,
-                                                     bool include_parent_in_sub_mem_count,
-                                                     bool merge_mems_at_gcsa_order) {
+                                                     bool include_parent_in_sub_mem_count {
 #ifdef debug_mapper
 #pragma omp critical
     {
@@ -648,10 +647,6 @@ vector<MaximalExactMatch> BaseMapper::find_mems_deep(string::const_iterator seq_
     // TODO: I think I already fixed this
     mems.erase(unique(mems.begin(), mems.end()), mems.end());
     // remove MEMs that are overlapping positionally (they may be redundant)
-    
-    if (merge_mems_at_gcsa_order) {
-        attempt_to_merge_order_length_mems(mems, seq_begin);
-    }
     
     return mems;
 }
