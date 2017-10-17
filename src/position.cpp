@@ -37,7 +37,15 @@ Position make_position(gcsa::node_type node) {
     p.set_offset(gcsa::Node::offset(node));
     return p;
 }
+    
+gcsa::node_type make_gcsa_node(const pos_t& pos) {
+    return gcsa::Node::encode(id(pos), offset(pos), is_rev(pos));
+}
 
+gcsa::node_type make_gcsa_node(const Position& pos) {
+    return gcsa::Node::encode(pos.node_id(), pos.offset(), pos.is_reverse());
+}
+    
 bool is_empty(const pos_t& pos) {
     return id(pos) == 0;
 }

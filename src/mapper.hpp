@@ -189,7 +189,8 @@ public:
                    int reseed_length = 0,
                    bool use_lcp_reseed_heuristic = true,
                    bool use_diff_based_fast_reseed = false,
-                   bool include_parent_in_sub_mem_count = false);
+                   bool include_parent_in_sub_mem_count = false,
+                   bool merge_mems_at_gcsa_order = false);
     
     // Use the GCSA2 index to find super-maximal exact matches.
     vector<MaximalExactMatch>
@@ -198,7 +199,6 @@ public:
                      int max_mem_length = 0,
                      int min_mem_length = 1,
                      int reseed_length = 0);
-    
     
     int min_mem_length; // a mem must be >= this length
     int mem_reseed_length; // the length above which we reseed MEMs to get potentially missed hits
@@ -245,6 +245,13 @@ protected:
     /// MEM touches at that index starting at a given hit
     void mem_positions_by_index(MaximalExactMatch& mem, pos_t hit_pos,
                                 vector<set<pos_t>>& positions_by_index_out);
+    
+    // TODO: this algorithm has conceptual problems (the problem I thought it solved actually doesn't occur
+    // in the manner I thought) but I think it might be useful later, so I'm leaving it in. It's also untested.
+    /// finds MEMs in the vector whose length is the order of the GCSA index and, if possible, merges them
+    /// into larger MEMs. assumes MEM vector is sorted lexicographically by read interval and that no
+    /// MEMs are longer than the GCSA order.
+    void attempt_to_merge_order_length_mems(vector<MaximalExactMatch>& mems, string::const_iterator seq_begin);
     
     // use the xg index to get a character at a particular position (rc or foward)
     char pos_char(pos_t pos);

@@ -49,7 +49,12 @@ Position make_position(const pos_t& pos);
 Position make_position(id_t id, bool is_rev, off_t off);
 /// Make a Position from a gcsa node
 Position make_position(gcsa::node_type node);
+/// Make a gcsa node from a pos_t
+gcsa::node_type make_gcsa_node(const pos_t& pos);
+/// Make a gcsa node from a Position
+gcsa::node_type make_gcsa_node(const Position& pos);
 
+    
 }
 
 #endif

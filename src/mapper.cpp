@@ -2,7 +2,7 @@
 #include "mapper.hpp"
 #include "algorithms/extract_containing_graph.hpp"
 
-//#define debug_mapper
+#define debug_mapper
 
 namespace vg {
 
@@ -286,7 +286,8 @@ vector<MaximalExactMatch> BaseMapper::find_mems_deep(string::const_iterator seq_
                                                      int reseed_length,
                                                      bool use_lcp_reseed_heuristic,
                                                      bool use_diff_based_fast_reseed,
-                                                     bool include_parent_in_sub_mem_count) {
+                                                     bool include_parent_in_sub_mem_count,
+                                                     bool merge_mems_at_gcsa_order) {
 #ifdef debug_mapper
 #pragma omp critical
     {
@@ -497,7 +498,12 @@ vector<MaximalExactMatch> BaseMapper::find_mems_deep(string::const_iterator seq_
                 // record our max lcp
                 //max_lcp = max(max_lcp, (int)parent.lcp());
                 max_lcp = (int)parent.lcp();
-                
+#ifdef debug_mapper
+#pragma omp critical
+                {
+                    cerr << "seeding next MEM search with LCP of length " << parent.lcp() << ": " << match.sequence() << endl;
+                }
+#endif
                 // only reseed if we didn't already look for sub-MEMs inside a longer MEM with the same
                 // start position on the read (in which case we would have already found all of the sub-MEMs
                 // of this MEM we're interested in, including this MEM itself)
@@ -634,7 +640,7 @@ vector<MaximalExactMatch> BaseMapper::find_mems_deep(string::const_iterator seq_
     std::sort(mems.begin(), mems.end(), [](const MaximalExactMatch& m1, const MaximalExactMatch& m2) {
         return m1.begin < m2.begin ? true : (m1.begin == m2.begin ? m1.end < m2.end : false);
     });
-
+    
     std::for_each(mems.begin(), mems.end(), [&total_mems](const MaximalExactMatch& mem) { total_mems += mem.nodes.size(); });
     fraction_filtered = (double) filtered_mems / (double) total_mems;
     
@@ -642,7 +648,147 @@ vector<MaximalExactMatch> BaseMapper::find_mems_deep(string::const_iterator seq_
     // TODO: I think I already fixed this
     mems.erase(unique(mems.begin(), mems.end()), mems.end());
     // remove MEMs that are overlapping positionally (they may be redundant)
+    
+    if (merge_mems_at_gcsa_order) {
+        attempt_to_merge_order_length_mems(mems, seq_begin);
+    }
+    
     return mems;
+}
+    
+void BaseMapper::attempt_to_merge_order_length_mems(vector<MaximalExactMatch>& mems, string::const_iterator seq_begin) {
+    // find the MEMs that may have been cut short by the order of the GCSA index
+    vector<size_t> order_sized;
+    unordered_map<pair<int64_t, int64_t>, size_t> mem_of_interval;
+    for (size_t i = 0; i < mems.size(); i++) {
+        MaximalExactMatch& mem = mems[i];
+        if (mem.length() == gcsa->order() && !mem.nodes.empty()) {
+            order_sized.push_back(i);
+            mem_of_interval[make_pair(mem.begin - seq_begin, mem.end - seq_begin)] = i;
+        }
+    }
+    
+    size_t num_raw_mems = mems.size();
+    
+    // TODO: it can technically happen that one of the order-length MEMs in the middle of a run of merge-able
+    // MEMs has no hits because it was above the hit max, but we don't handle that case
+    // TODO: it's also possible that two extendable hits will extend to the same position, in which case only
+    // one will be represented in the extendable hits map (this may occur around tandem repeats) but I think this
+    // is not such a big problem
+    unordered_map<pos_t, pair<size_t, size_t>> extendable_hits;
+    string::const_iterator prev_end;
+    for (size_t i = 0; i < order_sized.size(); i++) {
+        
+        // the MEM we're considering as a possible extension
+        MaximalExactMatch mem = mems[order_sized[i]];
+        
+        unordered_map<pos_t, pair<size_t, size_t>> next_extendable_hits;
+        
+        // could this MEM be an extension of a previous order-length MEM based on the sequence?
+        if (i > 0 && mem.end == prev_end + 1) {
+            // find MEM hits that could have been extended to the hits on this MEM
+            unordered_map<size_t, pair<size_t, size_t>> backward_extensions;
+            unordered_map<pair<size_t, size_t>, size_t> forward_extensions;
+            for (size_t j = 0; j < mem.nodes.size(); j++) {
+                auto hit_iter = extendable_hits.find(make_pos_t(mem.nodes[j]));
+                if (hit_iter != extendable_hits.end()) {
+                    forward_extensions[hit_iter->second] = j;
+                    backward_extensions[j] = hit_iter->second;
+                }
+            }
+            
+            // do the merge for any extensions we found
+            for (const auto& backward_extension : backward_extensions) {
+                // get the MEM we're extending
+                MaximalExactMatch& extending_mem = mems[backward_extension.second.first];
+                
+                // get the MEM corresponding to this interval of the sequence or make a new one to do so
+                pair<int64_t, int64_t> extended_interval(extending_mem.begin - seq_begin, mem.end - seq_begin);
+                auto mem_iter = mem_of_interval.find(extended_interval);
+                if (mem_iter == mem_of_interval.end()) {
+                    mems.emplace_back(seq_begin + extended_interval.first,
+                                      seq_begin + extended_interval.second,
+                                      gcsa::range_type()); // a dummy value
+                    
+                    mem_of_interval[extended_interval] = mems.size() - 1;
+                    mem_iter = mem_of_interval.find(extended_interval);
+                }
+                
+                // add the extending MEM's hit into the extended MEM
+                MaximalExactMatch& extended_mem = mems[mem_iter->second];
+                extended_mem.nodes.push_back(extending_mem.nodes[backward_extension.second.second]);
+                
+                // mark this hit as extendable into the next positions on the graph
+                for (const pos_t& next_pos : positions_bp_from(make_pos_t(mem.nodes[backward_extension.first]), 1, false)) {
+                    next_extendable_hits[next_pos] = make_pair(mem_iter->second, extended_mem.nodes.size() - 1);
+                }
+                
+                // remove the hit from the extending MEM
+                std::swap(extending_mem.nodes[backward_extension.second.second], extending_mem.nodes.back());
+                extending_mem.nodes.pop_back();
+                
+                // if necessary, update the extension pointers for the other hit we swapped into its place
+                pair<size_t, size_t> swapped_hit(backward_extension.second.first, extending_mem.nodes.size());
+                if (forward_extensions.count(swapped_hit)) {
+                    size_t swapped_extend_to = forward_extensions[swapped_hit];
+                    // these now point to the same place that we just swapped out of
+                    backward_extensions[swapped_extend_to] = backward_extension.second;
+                    forward_extensions[backward_extension.second] = swapped_extend_to;
+                    // and this pointer is outdated
+                    forward_extensions.erase(swapped_hit);
+                }
+            }
+            
+            // remove extended hits from the MEM we're extending into
+            for (int64_t j = mem.nodes.size() - 1; j >= 0; j--) {
+                if (backward_extensions.count((size_t) j)) {
+                    std::swap(mem.nodes[j], mem.nodes.back());
+                    mem.nodes.pop_back();
+                }
+            }
+        }
+        
+        // mark all remaining hits in this MEM as extendable in the the next positions on the graph
+        for (size_t j = 0; j < mem.nodes.size(); j++) {
+            for (const pos_t& next_pos : positions_bp_from(make_pos_t(mem.nodes[j]), 1, false)) {
+                next_extendable_hits[next_pos] = make_pair(i, j);
+            }
+        }
+        // set up for the next iteration
+        extendable_hits.clear();
+        std::swap(next_extendable_hits, extendable_hits);
+        prev_end = mem.end;
+    }
+    
+    // clean up if we actually did any merges
+    if (mems.size() > num_raw_mems) {
+        // remove the original order-length MEMs whose hits were all extended
+        int64_t last_raw = num_raw_mems - 1;
+        for (int64_t i = order_sized.size() - 1; i >= 0; i--) {
+            if (mems[order_sized[i]].nodes.empty()) {
+                std::swap(mems[order_sized[i]], mems[last_raw]);
+                last_raw--;
+            }
+        }
+        for (int64_t i = num_raw_mems - 1; i > last_raw; i--) {
+            std::swap(mems[i], mems.back());
+            mems.pop_back();
+        }
+        // remove any intermediate extended MEMs whose hits were all extended
+        for (int64_t i = last_raw; i < mems.size(); ) {
+            if (mems[i].nodes.empty()) {
+                std::swap(mems[i], mems.back());
+                mems.pop_back();
+            }
+            else {
+                i++;
+            }
+        }
+        // re-sort the MEMs
+        std::sort(mems.begin(), mems.end(), [](const MaximalExactMatch& m1, const MaximalExactMatch& m2) {
+            return m1.begin < m2.begin ? true : (m1.begin == m2.begin ? m1.end < m2.end : false);
+        });
+    }
 }
 
 void BaseMapper::find_sub_mems(const vector<MaximalExactMatch>& mems,
