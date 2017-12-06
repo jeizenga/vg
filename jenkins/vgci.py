@@ -990,7 +990,7 @@ class VGCITest(TestCase):
 
     @timeout_decorator.timeout(16000)        
     def test_sim_chr21_snp1kg_trained(self):
-        self._test_mapeval(100000, 'CHR21', 'snp1kg',
+        self._test_mapeval(1000000, 'CHR21', 'snp1kg',
                            ['primary', 'snp1kg'],
                            #score_baseline_graph='primary',
                            sample='HG00096',
