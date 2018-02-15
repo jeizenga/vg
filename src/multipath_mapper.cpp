@@ -7,7 +7,7 @@
 //#define debug_multipath_mapper_mapping
 //#define debug_multipath_mapper_alignment
 //#define debug_validate_multipath_alignments
-//#define debug_report_startup_training
+#define debug_report_startup_training
 
 #include "multipath_mapper.hpp"
 
@@ -471,8 +471,6 @@ namespace vg {
         
         // compute the pseudo length of a bunch of randomly generated sequences
         vector<double> lengths(num_simulations, 0.0);
-        double length_sum = 0.0;
-        double max_length = numeric_limits<double>::min();
 #pragma omp parallel for
         for (size_t i = 0; i < num_simulations; i++) {
             
@@ -483,61 +481,158 @@ namespace vg {
             
             if (!multipath_alns.empty()) {
                 lengths[i] = pseudo_length(multipath_alns.front());
-#pragma omp critical
-                {
-                    length_sum += lengths[i];
-                    max_length = max(lengths[i], max_length);
-                }
             }
         }
         
         // reset the memo of p-values (which we are calibrating) for any updates using the default parameter during the null mappings
         p_value_memo.clear();
         
-        // model the lengths as the maximum of genome_size * read_length exponential variables, which gives density function:
+        // model the lengths as the maximum of genome_size * read_length exponential variables with an added constant, which
+        // is meant to represent the fact that the graph contains all k-mers up to some length (the constant), after which
+        // each mapping can extend or mismatch in a way that is random and independent because the sequences are random and
+        // independent. the length is a considered to be the maximum of genome_size * read_length of these random variates.
+        // this gives the following density function:
         //
-        //   GLS exp(-Sx) (1 - exp(-Sx))^(GL - 1)
+        //   GLS exp(-S(x - K)) (1 - exp(-S(x - K)))^(GL - 1)      for  x >= K
         //
         // where:
-        //   G = genome size
-        //   R = read length
-        //   S = scale parameter (which we optimize below)
+        //   G = genome size (approximated from graph)
+        //   R = read length (determined by data)
+        //   K = added constant (optimized below)
+        //   S = scale parameter (optimized below)
         
         
         // compute the log of the 1st and 2nd derivatives for the log likelihood (split up by positive and negative summands)
         // we have to do it this wonky way because the exponentiated numbers get very large and cause overflow otherwise
         
-        double log_deriv_neg_part = log(length_sum);
+        double length_sum = accumulate(lengths.begin(), lengths.end(), 0.0);
         
-        function<double(double)> log_deriv_pos_part = [&](double scale) {
+        function<double(double)> log_dS_pos_part = [&](double scale, double constant) {
             double accumulator = numeric_limits<double>::lowest();
             for (size_t i = 0; i < lengths.size(); i++) {
                 double length = lengths[i];
-                accumulator = add_log(accumulator, log(length) - scale * length - log(1.0 - exp(-scale * length)));
+                double length_diff = length - constant;
+                double log_numer = log(length_diff);
+                double log_denom = subtract_log(scale * length_diff, 0.0);
+                accumulator = add_log(accumulator, log_numer - log_denom);
             }
-            accumulator += log(xindex->seq_length * simulated_read_length - 1.0);
-            return add_log(accumulator, log(num_simulations / scale));
+            accumulator += subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0);
+            return add_log(add_log(accumulator, log(lengths.size() / scale)), log(lengths.size() * constant));
         };
         
-        function<double(double)> log_deriv2_neg_part = [&](double scale) {
+        function<double(double)> log_dS_neg_part = [&](double scale, double constant) {
+            return log(length_sum);
+        };
+        
+        function<double(double)> log_d2S_neg_part = [&](double scale, double constant) {
             double accumulator = numeric_limits<double>::lowest();
             for (size_t i = 0; i < lengths.size(); i++) {
                 double length = lengths[i];
-                accumulator = add_log(accumulator, 2.0 * log(length) - scale * length - 2.0 * log(1.0 - exp(-scale * length)));
+                double length_diff = length - constant;
+                double log_numer = add_log(2.0 * log(length_diff), scale * length_diff);
+                double log_denom = 2.0 * subtract_log(scale * length_diff, 0.0);
+                accumulator = add_log(accumulator, log_numer - log_denom);
             }
-            accumulator += log(xindex->seq_length * simulated_read_length - 1.0);
-            return add_log(accumulator, log(num_simulations / (scale * scale)));
+            accumulator += subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0);
+            return add_log(accumulator, log(lengths.size() / (scale * scale)));
+        };
+        
+        function<double(double)> log_dK_pos_part = [&](double scale, double constant) {
+            return log(lengths.size() * scale);
+        };
+        
+        function<double(double)> log_dK_neg_part = [&](double scale, double constant) {
+            double accumulator = numeric_limits<double>::lowest();
+            for (size_t i = 0; i < lengths.size(); i++) {
+                double length = lengths[i];
+                accumulator = add_log(accumulator, subtract_log(scale * (length - constant), 0.0));
+            }
+            accumulator += subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0) + log(scale);
+            return add_log(accumulator, log(lengths.size() * scale));
+        };
+        
+        function<double(double)> log_d2K_neg_part = [&](double scale, double constant) {
+            double accumulator = numeric_limits<double>::lowest();
+            for (size_t i = 0; i < lengths.size(); i++) {
+                double length = lengths[i];
+                double length_diff = length - constant;
+                double log_numer = scale * length_diff;
+                double log_denom = 2.0 * subtract_log(scale * length_diff, 0.0);
+                accumulator = add_log(accumulator, log_numer - log_denom);
+            }
+            return accumulator + subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0) + 2.0 * log(scale);
+        };
+        
+        function<double(double)> log_dSdK_pos_part = [&](double scale, double constant) {
+            double accumulator = numeric_limits<double>::lowest();
+            for (size_t i = 0; i < lengths.size(); i++) {
+                double length = lengths[i];
+                double length_diff = length - constant;
+                double log_numer = add_log(log(scale * length) + scale * length_diff, 0.0);
+                double log_denom = 2.0 * subtract_log(scale * length_diff, 0.0);
+                accumulator = add_log(accumulator, log_numer - log_denom);
+            }
+            return accumulator + subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0);
+        };
+        
+        function<double(double)> log_dSdK_neg_part = [&](double scale, double constant) {
+            double accumulator = numeric_limits<double>::lowest();
+            for (size_t i = 0; i < lengths.size(); i++) {
+                double length = lengths[i];
+                double length_diff = length - constant;
+                double log_numer = add_log(log(scale * constant) + scale * length_diff, scale * length_diff);
+                double log_denom = 2.0 * subtract_log(scale * length_diff, 0.0);
+                accumulator = add_log(accumulator, log_numer - log_denom);
+            }
+            return accumulator + subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0);
+        };
+        
+        function<double(double)> log_dSdK_neg_part = [&](double scale, double constant) {
+            double accumulator = numeric_limits<double>::lowest();
+            for (size_t i = 0; i < lengths.size(); i++) {
+                double length = lengths[i];
+                double length_diff = length - constant;
+                double log_numer = scale * length_diff;
+                double log_denom = 2.0 * subtract_log(scale * length_diff, 0.0);
+                accumulator = add_log(accumulator, log_numer - log_denom);
+            }
+            return accumulator + subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0) + 2.0 * log(scale);
         };
         
         // use Newton's method to find the MLE
+        
         double tolerance = 1e-10;
-        double scale = 1.0 / max_length;
+        // choose a starting values that aren't super crazy
+        double scale = 1.0 / (*max_element(lengths.begin(), lengths.end()));
+        double constant = 0.5 * (*min_element(lengths.begin(), lengths.end()));
+        // init the previous values with something arbitrary that will still enter the while loop
         double prev_scale = scale * (1.0 + 10.0 * tolerance);
-        while (abs(prev_scale / scale - 1.0) > tolerance) {
+        double prev_constant = constant * (1.0 + 10.0 * tolerance);
+        while (abs(prev_scale / scale - 1.0) > tolerance || abs(prev_constant / constant - 1.0) > tolerance) {
             prev_scale = scale;
-            double log_d2 = log_deriv2_neg_part(scale);
-            double log_d_pos = log_deriv_pos_part(scale);
-            double log_d_neg = log_deriv_neg_part;
+            prev_constant = constant;
+            
+            double log_dS_pos = log_dS_pos_part(scale, constant);
+            double log_dS_neg = log_dS_neg_part(scale, constant);
+            
+            double log_dK_pos = log_dK_pos_part(scale, constant);
+            double log_dK_neg = log_dK_neg_part(scale, constant);
+            
+            double log_d2S_neg = log_d2S_neg_part(scale, constant);
+            
+            double log_d2K_neg = log_d2K_neg_part(scale, constant);
+            
+            double log_dSdK_pos = log_dSdK_pos_part(scale, constant);
+            double log_dSdK_neg = log_dSdK_neg_part(scale, constant);
+            
+            // compute the determinant of the Jacobian (in log space)
+            bool dSdK_pos = log_dSdK_pos > log_dSdK_neg;
+            bool log_abs_dSdK = dSdK_pos ? subtract_log(log_dSdK_pos, log_dSdK_neg) : subtract_log(log_dSdK_neg, log_dSdK_pos);
+            bool determ_pos = log_d2S_neg + log_d2K_neg > 2.0 * log_abs_dSdK;
+            bool log_abs_determ = determ_pos ? subtract_log(log_d2S_neg + log_d2K_neg, 2.0 * log_abs_dSdK) : subtract_log(2.0 * log_abs_dSdK, log_d2S_neg + log_d2K_neg);
+            
+            /// TODO finish implementing 2-D newton-raphson
+            
             // determine if the value of the 1st deriv is positive or negative, and compute the
             // whole ratio to the 2nd deriv from the positive and negative parts accordingly
             if (log_d_pos > log_d_neg) {
@@ -550,10 +645,12 @@ namespace vg {
         
 #ifdef debug_report_startup_training
         cerr << "trained scale: " << scale << endl;
+        cerr << "trained length offset: " << min_length << endl;
 #endif
         
         // set the multipler to the maximimum likelihood
         pseudo_length_multiplier = scale;
+        pseudo_length_offset = min_length;
         
         adjust_alignments_for_base_quality = reset_quality_adjustments;
     }

@@ -80,6 +80,7 @@ namespace vg {
         size_t min_clustering_mem_length = 0;
         size_t max_p_value_memo_size = 500;
         double pseudo_length_multiplier = 1.65;
+        double pseudo_length_offset = 11;
         bool unstranded_clustering = true;
         size_t max_rescue_attempts = 32;
         size_t secondary_rescue_attempts = 4;
