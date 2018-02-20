@@ -455,7 +455,13 @@ namespace vg {
             return iter->second;
         }
         else {
-            double p_value = 1.0 - pow(1.0 - exp(-(match_length * pseudo_length_multiplier)), xindex->seq_length * read_length);
+            double p_value;
+            if (match_length < pseudo_length_offset) {
+                p_value = 1.0;
+            }
+            else {
+                p_value = 1.0 - pow(1.0 - exp(-((match_length - pseudo_length_offset) * pseudo_length_multiplier)), xindex->seq_length * read_length);
+            }
             if (p_value_memo.size() < max_p_value_memo_size) {
                 p_value_memo[make_pair(match_length, read_length)] = p_value;
             }
@@ -497,7 +503,7 @@ namespace vg {
         //
         // where:
         //   G = genome size (approximated from graph)
-        //   R = read length (determined by data)
+        //   L = read length (determined by data)
         //   K = added constant (optimized below)
         //   S = scale parameter (optimized below)
         
@@ -506,105 +512,78 @@ namespace vg {
         // we have to do it this wonky way because the exponentiated numbers get very large and cause overflow otherwise
         
         double length_sum = accumulate(lengths.begin(), lengths.end(), 0.0);
+        for (double length : lengths) {
+            cerr << length << ", ";
+        }
+        cerr << endl;
         
-        function<double(double)> log_dS_pos_part = [&](double scale, double constant) {
-            double accumulator = numeric_limits<double>::lowest();
-            for (size_t i = 0; i < lengths.size(); i++) {
-                double length = lengths[i];
-                double length_diff = length - constant;
-                double log_numer = log(length_diff);
-                double log_denom = subtract_log(scale * length_diff, 0.0);
-                accumulator = add_log(accumulator, log_numer - log_denom);
+        function<StableDouble(double, double)> dS = [&](double scale, double constant) {
+            StableDouble accumulator;
+            for (double length : lengths) {
+                StableDouble diff_term(length - constant);
+                StableDouble denom_term = (StableDouble(scale * (length - constant), true) - StableDouble(0.0, true));
+                accumulator += diff_term / denom_term;
             }
-            accumulator += subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0);
-            return add_log(add_log(accumulator, log(lengths.size() / scale)), log(lengths.size() * constant));
+            accumulator *= StableDouble((double)xindex->seq_length) * StableDouble((double)simulated_read_length) - StableDouble(0.0, true);
+            accumulator += lengths.size() / scale;
+            accumulator -= length_sum;
+            accumulator += lengths.size() * constant;
+            return accumulator;
         };
         
-        function<double(double)> log_dS_neg_part = [&](double scale, double constant) {
-            return log(length_sum);
-        };
-        
-        function<double(double)> log_d2S_neg_part = [&](double scale, double constant) {
-            double accumulator = numeric_limits<double>::lowest();
-            for (size_t i = 0; i < lengths.size(); i++) {
-                double length = lengths[i];
-                double length_diff = length - constant;
-                double log_numer = add_log(2.0 * log(length_diff), scale * length_diff);
-                double log_denom = 2.0 * subtract_log(scale * length_diff, 0.0);
-                accumulator = add_log(accumulator, log_numer - log_denom);
+        function<StableDouble(double, double)> dS2 = [&](double scale, double constant) {
+            StableDouble accumulator;
+            for (double length : lengths) {
+                StableDouble diff_term(length - constant);
+                StableDouble exp_term(scale * (length - constant), true);
+                StableDouble denom_term = exp_term - StableDouble(0.0, true);
+                accumulator += diff_term * diff_term * exp_term / (denom_term * denom_term);
             }
-            accumulator += subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0);
-            return add_log(accumulator, log(lengths.size() / (scale * scale)));
+            accumulator *= StableDouble(0.0, true) - StableDouble((double)xindex->seq_length) * StableDouble((double)simulated_read_length);
+            accumulator -= lengths.size() / (scale * scale);
+            return accumulator;
         };
         
-        function<double(double)> log_dK_pos_part = [&](double scale, double constant) {
-            return log(lengths.size() * scale);
-        };
-        
-        function<double(double)> log_dK_neg_part = [&](double scale, double constant) {
-            double accumulator = numeric_limits<double>::lowest();
-            for (size_t i = 0; i < lengths.size(); i++) {
-                double length = lengths[i];
-                accumulator = add_log(accumulator, subtract_log(scale * (length - constant), 0.0));
+        function<StableDouble(double, double)> dK = [&](double scale, double constant) {
+            StableDouble accumulator;
+            for (double length : lengths) {
+                accumulator += (StableDouble(scale * (length - constant), true) - StableDouble(0.0, true)).inverse();
             }
-            accumulator += subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0) + log(scale);
-            return add_log(accumulator, log(lengths.size() * scale));
+            accumulator *= (StableDouble(0.0, true) - StableDouble((double)xindex->seq_length) * StableDouble((double)simulated_read_length)) * scale;
+            accumulator += lengths.size() / scale;
+            return accumulator;
         };
         
-        function<double(double)> log_d2K_neg_part = [&](double scale, double constant) {
-            double accumulator = numeric_limits<double>::lowest();
-            for (size_t i = 0; i < lengths.size(); i++) {
-                double length = lengths[i];
-                double length_diff = length - constant;
-                double log_numer = scale * length_diff;
-                double log_denom = 2.0 * subtract_log(scale * length_diff, 0.0);
-                accumulator = add_log(accumulator, log_numer - log_denom);
+        function<StableDouble(double, double)> dK2 = [&](double scale, double constant) {
+            StableDouble accumulator;
+            for (double length : lengths) {
+                StableDouble exp_term(scale * (length - constant), true);
+                StableDouble denom_term = exp_term - StableDouble(0.0, true);
+                accumulator += exp_term / (denom_term * denom_term);
             }
-            return accumulator + subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0) + 2.0 * log(scale);
+            accumulator *= (StableDouble(0.0, true) - StableDouble((double)xindex->seq_length) * StableDouble((double)simulated_read_length)) * scale * scale;
+            return accumulator;
         };
         
-        function<double(double)> log_dSdK_pos_part = [&](double scale, double constant) {
-            double accumulator = numeric_limits<double>::lowest();
-            for (size_t i = 0; i < lengths.size(); i++) {
-                double length = lengths[i];
-                double length_diff = length - constant;
-                double log_numer = add_log(log(scale * length) + scale * length_diff, 0.0);
-                double log_denom = 2.0 * subtract_log(scale * length_diff, 0.0);
-                accumulator = add_log(accumulator, log_numer - log_denom);
+        function<StableDouble(double, double)> dSdK = [&](double scale, double constant) {
+            StableDouble accumulator;
+            for (double length : lengths) {
+                StableDouble exp_term(scale * (length - constant), true);
+                StableDouble denom_term = exp_term - StableDouble(0.0, true);
+                StableDouble numer_term = exp_term * scale * constant - exp_term * scale * length + exp_term - StableDouble(0.0, true);
+                accumulator += numer_term / (denom_term * denom_term);
             }
-            return accumulator + subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0);
-        };
-        
-        function<double(double)> log_dSdK_neg_part = [&](double scale, double constant) {
-            double accumulator = numeric_limits<double>::lowest();
-            for (size_t i = 0; i < lengths.size(); i++) {
-                double length = lengths[i];
-                double length_diff = length - constant;
-                double log_numer = add_log(log(scale * constant) + scale * length_diff, scale * length_diff);
-                double log_denom = 2.0 * subtract_log(scale * length_diff, 0.0);
-                accumulator = add_log(accumulator, log_numer - log_denom);
-            }
-            return accumulator + subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0);
-        };
-        
-        function<double(double)> log_dSdK_neg_part = [&](double scale, double constant) {
-            double accumulator = numeric_limits<double>::lowest();
-            for (size_t i = 0; i < lengths.size(); i++) {
-                double length = lengths[i];
-                double length_diff = length - constant;
-                double log_numer = scale * length_diff;
-                double log_denom = 2.0 * subtract_log(scale * length_diff, 0.0);
-                accumulator = add_log(accumulator, log_numer - log_denom);
-            }
-            return accumulator + subtract_log(log(xindex->seq_length) + log(simulated_read_length), 0.0) + 2.0 * log(scale);
+            accumulator *= (StableDouble(0.0, true) - StableDouble((double)xindex->seq_length) * StableDouble((double)simulated_read_length)) * scale * scale;
+            accumulator += (double)lengths.size();
+            return accumulator;
         };
         
         // use Newton's method to find the MLE
         
-        double tolerance = 1e-10;
+        double tolerance = 1e-6;
         // choose a starting values that aren't super crazy
-        double scale = 1.0 / (*max_element(lengths.begin(), lengths.end()));
-        double constant = 0.5 * (*min_element(lengths.begin(), lengths.end()));
+        double scale = 1.0;//1.0 / (*max_element(lengths.begin(), lengths.end()));
+        double constant = 10.0;//0.5 * (*min_element(lengths.begin(), lengths.end()));
         // init the previous values with something arbitrary that will still enter the while loop
         double prev_scale = scale * (1.0 + 10.0 * tolerance);
         double prev_constant = constant * (1.0 + 10.0 * tolerance);
@@ -612,45 +591,37 @@ namespace vg {
             prev_scale = scale;
             prev_constant = constant;
             
-            double log_dS_pos = log_dS_pos_part(scale, constant);
-            double log_dS_neg = log_dS_neg_part(scale, constant);
+            // compute the gradient
+            StableDouble ds = dS(scale, constant);
+            StableDouble dk = dK(scale, constant);
             
-            double log_dK_pos = log_dK_pos_part(scale, constant);
-            double log_dK_neg = log_dK_neg_part(scale, constant);
+            // compute the Hessian
+            StableDouble ds2 = dS2(scale, constant);
+            StableDouble dk2 = dK2(scale, constant);
+            StableDouble dsdk = dSdK(scale, constant);
             
-            double log_d2S_neg = log_d2S_neg_part(scale, constant);
+            cerr << "S = " << scale << endl;
+            cerr << "K = " << constant << endl;
+            cerr << "\tdS = " << ds << endl;
+            cerr << "\tdS2 = " << ds2 << endl;
+            cerr << "\tdK = " << dk << endl;
+            cerr << "\tdK2 = " << dk2 << endl;
+            cerr << "\tdSdK = " << dsdk << endl;
             
-            double log_d2K_neg = log_d2K_neg_part(scale, constant);
-            
-            double log_dSdK_pos = log_dSdK_pos_part(scale, constant);
-            double log_dSdK_neg = log_dSdK_neg_part(scale, constant);
-            
-            // compute the determinant of the Jacobian (in log space)
-            bool dSdK_pos = log_dSdK_pos > log_dSdK_neg;
-            bool log_abs_dSdK = dSdK_pos ? subtract_log(log_dSdK_pos, log_dSdK_neg) : subtract_log(log_dSdK_neg, log_dSdK_pos);
-            bool determ_pos = log_d2S_neg + log_d2K_neg > 2.0 * log_abs_dSdK;
-            bool log_abs_determ = determ_pos ? subtract_log(log_d2S_neg + log_d2K_neg, 2.0 * log_abs_dSdK) : subtract_log(2.0 * log_abs_dSdK, log_d2S_neg + log_d2K_neg);
-            
-            /// TODO finish implementing 2-D newton-raphson
-            
-            // determine if the value of the 1st deriv is positive or negative, and compute the
-            // whole ratio to the 2nd deriv from the positive and negative parts accordingly
-            if (log_d_pos > log_d_neg) {
-                scale += exp(subtract_log(log_d_pos, log_d_neg) - log_d2);
-            }
-            else {
-                scale -= exp(subtract_log(log_d_neg, log_d_pos) - log_d2);
-            }
+            // solve the system and add the increment to the trained parameters
+            StableDouble determinant = ds2 * dk2 - dsdk * dsdk;
+            scale -= ((dk2 * ds - dsdk * dk) / determinant).to_double();
+            constant -= ((ds2 * dk - dsdk * ds) / determinant).to_double();
         }
         
 #ifdef debug_report_startup_training
         cerr << "trained scale: " << scale << endl;
-        cerr << "trained length offset: " << min_length << endl;
+        cerr << "trained length offset: " << constant << endl;
 #endif
         
         // set the multipler to the maximimum likelihood
         pseudo_length_multiplier = scale;
-        pseudo_length_offset = min_length;
+        pseudo_length_offset = constant;
         
         adjust_alignments_for_base_quality = reset_quality_adjustments;
     }

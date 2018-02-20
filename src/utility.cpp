@@ -256,6 +256,128 @@ vector<size_t> range_vector(size_t begin, size_t end) {
     return range;
 }
 
+StableDouble::StableDouble() : log_abs_x(numeric_limits<double>::lowest()), positive(true) {
+    
+}
+
+StableDouble::StableDouble(double x) {
+    if (x == 0.0) {
+        log_abs_x = numeric_limits<double>::lowest();
+        positive = true;
+    }
+    else if (x < 0) {
+        log_abs_x = log(-x);
+        positive = false;
+    }
+    else {
+        log_abs_x = log(x);
+        positive = true;
+    }
+}
+
+StableDouble::StableDouble(double log_abs_x, bool positive) : log_abs_x(log_abs_x), positive(positive)  {
+
+}
+
+double StableDouble::to_double() const {
+    return positive ? exp(log_abs_x) : -exp(log_abs_x);
+}
+
+StableDouble StableDouble::inverse() const {
+    return StableDouble(-log_abs_x, positive);
+}
+
+StableDouble StableDouble::operator-() const {
+    return StableDouble(log_abs_x, !positive);
+}
+
+StableDouble StableDouble::operator*(const StableDouble& other) const {
+    return StableDouble(log_abs_x + other.log_abs_x, positive == other.positive);
+}
+
+StableDouble StableDouble::operator/(const StableDouble& other) const {
+    return StableDouble(log_abs_x - other.log_abs_x, positive == other.positive);
+}
+
+StableDouble StableDouble::operator+(const StableDouble& other) const {
+    if (positive == other.positive) {
+        return StableDouble(add_log(log_abs_x, other.log_abs_x), positive);
+    }
+    else if (log_abs_x == other.log_abs_x) {
+        return StableDouble();
+    }
+    else if (log_abs_x > other.log_abs_x) {
+        return StableDouble(subtract_log(log_abs_x, other.log_abs_x), positive);
+    }
+    else {
+        return StableDouble(subtract_log(other.log_abs_x, log_abs_x), other.positive);
+    }
+}
+
+StableDouble StableDouble::operator-(const StableDouble& other) const {
+    return *this + (-other);
+}
+
+StableDouble StableDouble::operator*(const double other) const {
+    return *this * StableDouble(other);
+}
+
+StableDouble StableDouble::operator/(const double other) const {
+    return *this / StableDouble(other);
+}
+
+StableDouble StableDouble::operator+(const double other) const {
+    return *this + StableDouble(other);
+}
+
+StableDouble StableDouble::operator-(const double other) const {
+    return *this - StableDouble(other);
+}
+    
+StableDouble& StableDouble::operator*=(const StableDouble& other) {
+    *this = *this * other;
+    return *this;
+}
+
+StableDouble& StableDouble::operator/=(const StableDouble& other) {
+    *this = *this / other;
+    return *this;
+}
+
+StableDouble& StableDouble::operator+=(const StableDouble& other) {
+    *this = *this + other;
+    return *this;
+}
+
+StableDouble& StableDouble::operator-=(const StableDouble& other) {
+    *this = *this - other;
+    return *this;
+}
+
+StableDouble& StableDouble::operator*=(const double other) {
+    *this = *this * other;
+    return *this;
+}
+
+StableDouble& StableDouble::operator/=(const double other) {
+    *this = *this / other;
+    return *this;
+}
+
+StableDouble& StableDouble::operator+=(const double other) {
+    *this = *this + other;
+    return *this;
+}
+
+StableDouble& StableDouble::operator-=(const double other) {
+    *this = *this - other;
+    return *this;
+}
+
+ostream& operator<<(ostream& out, const StableDouble& val) {
+    return out << (val.positive ? "exp(" : "-exp(") << val.log_abs_x << ")";
+}
+
 UnionFind::UnionFind(size_t size) {
     uf_nodes.reserve(size);
     for (size_t i = 0; i < size; i++) {

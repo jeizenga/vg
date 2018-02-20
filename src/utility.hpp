@@ -78,6 +78,65 @@ inline double add_log(double log_x, double log_y) {
 inline double subtract_log(double log_x, double log_y) {
     return log_x + log(1.0 - exp(log_y - log_x));
 }
+    
+/*
+ * A class that supports basic floating point arithmetic operations on internal values stored 
+ * in log-transformed space to reduce risk of overflow and underflow
+ */
+class StableDouble {
+public:
+    
+    /// Default to 0
+    StableDouble();
+    /// Convert from a double
+    StableDouble(double x);
+    /// Construct from log-transformed value
+    StableDouble(double log_abs_x, bool positive);
+    
+    /// Convert to double
+    double to_double() const;
+    
+    /// Unary operators
+    
+    StableDouble operator-() const;
+    StableDouble inverse() const;
+    
+    /// Binary operators with StableDoubles
+    
+    StableDouble operator*(const StableDouble& other) const;
+    StableDouble operator/(const StableDouble& other) const;
+    StableDouble operator+(const StableDouble& other) const;
+    StableDouble operator-(const StableDouble& other) const;
+    
+    /// Binary operators with standard doubles
+    
+    StableDouble operator*(const double other) const;
+    StableDouble operator/(const double other) const;
+    StableDouble operator+(const double other) const;
+    StableDouble operator-(const double other) const;
+    
+    /// Assignment operators with StableDoubles
+    
+    StableDouble& operator*=(const StableDouble& other);
+    StableDouble& operator/=(const StableDouble& other);
+    StableDouble& operator+=(const StableDouble& other);
+    StableDouble& operator-=(const StableDouble& other);
+    
+    /// Assignment operators with standard doubles
+    
+    StableDouble& operator*=(const double other);
+    StableDouble& operator/=(const double other);
+    StableDouble& operator+=(const double other);
+    StableDouble& operator-=(const double other);
+    
+    friend ostream& operator<<(ostream& out, const StableDouble& val);
+    
+private:
+    double log_abs_x;
+    bool positive;
+};
+    
+ostream& operator<<(ostream& out, const StableDouble& val);
  
 /**
  * Convert a number ln to the same number log 10.
@@ -470,6 +529,7 @@ size_t modular_exponent(uint64_t base, uint64_t exponent, uint64_t modulus);
 
 /// Returns a uniformly random DNA sequence of the given length
 string random_sequence(size_t length);
+
 
 /// Escape "%" to "%25"
 string percent_url_encode(const string& seq);
