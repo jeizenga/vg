@@ -1666,7 +1666,7 @@ void BaseMapper::apply_haplotype_consistency_scores(const vector<Alignment*>& al
     
     // Build Yohei's recombination probability calculator. Feed it the haplotype
     // count from the XG index that was generated alongside the GBWT.
-    haplo::haploMath::RRMemo haplo_memo(NEG_LOG_PER_BASE_RECOMB_PROB, haplotype_count);
+    haplo::haploMath::RRMemo haplo_memo(recombination_penalty, haplotype_count);
     
     // This holds all the computed haplotype logprobs
     vector<double> haplotype_logprobs;
@@ -3497,14 +3497,9 @@ VG Mapper::cluster_subgraph_strict(const Alignment& aln, const vector<MaximalExa
                                     + (mem.begin - aln.sequence().begin()));
     }
     
-    
-    // extract the protobuf Graph
-    Graph proto_graph;
-    algorithms::extract_containing_graph(xindex, proto_graph, positions, forward_max_dist, backward_max_dist);
-                                         
-    // Wrap it in a vg
+    // Extract the graph
     VG graph;
-    graph.extend(proto_graph);
+    algorithms::extract_containing_graph(xindex, &graph, positions, forward_max_dist, backward_max_dist);
     
     graph.remove_orphan_edges();
     
