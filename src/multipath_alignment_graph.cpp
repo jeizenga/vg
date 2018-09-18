@@ -2645,7 +2645,7 @@ namespace vg {
             }
             cerr << endl;
             for (pair<size_t, size_t> edge : path_nodes[i].edges) {
-                cerr << "\tto " << edge.first << ", dist " << edge.second << endl;
+                cerr << "\tto " << edge.first << ", graph dist " << edge.second << ", read dist " << path_nodes[edge.first].begin - path_nodes[i].end << endl;
             }
         }
 #endif
@@ -2781,13 +2781,13 @@ namespace vg {
 #ifdef debug_multipath_alignment
         cerr << "pruned to high scoring paths, topology is:" << endl;
         for (size_t i = 0; i < path_nodes.size(); i++) {
-            cerr << "node " << i << ", " << pb2json(path_nodes[i].path.mapping(0).position()) << " ";
+            cerr << "node " << i << ", " << pb2json(path_nodes[i].path.mapping(0).position()) << " read interval [" << path_nodes[i].begin - alignment.sequence().begin() << ":" << path_nodes[i].end - alignment.sequence().begin() << "] ";
             for (auto iter = path_nodes[i].begin; iter != path_nodes[i].end; iter++) {
                 cerr << *iter;
             }
             cerr << endl;
             for (pair<size_t, size_t> edge : path_nodes[i].edges) {
-                cerr << "\tto " << edge.first << ", dist " << edge.second << endl;
+                cerr << "\tto " << edge.first << ", graph dist " << edge.second << ", read dist " << path_nodes[edge.first].begin - path_nodes[i].end << endl;
             }
         }
 #endif
@@ -3184,7 +3184,6 @@ namespace vg {
                         if (!alignment.quality().empty()) {
                             left_tail_sequence.set_quality(alignment.quality().substr(0, path_node.begin - alignment.sequence().begin()));
                         }
-                        
                         
 #ifdef debug_multipath_alignment
                         cerr << "making " << num_alt_alns << " alignments of sequence: " << left_tail_sequence.sequence() << endl << "to left tail graph: " << pb2json(tail_graph) << endl;
