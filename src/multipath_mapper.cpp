@@ -3238,6 +3238,10 @@ namespace vg {
                 if (!all_paths_pop_consistent) {
                     // If we failed, bail out on population score correction for the whole MultipathAlignment.
                     
+#ifdef debug_multipath_mapper
+                    cerr << "could not score alignment based on population, ending population-based scoring" << endl;
+#endif
+                    
                     // Go and do the next MultipathAlignment since we have the base score for this one
                     continue;
                 }
@@ -3320,6 +3324,10 @@ namespace vg {
                 if (cluster_idxs) {
                     std::swap((*cluster_idxs)[index[i]], (*cluster_idxs)[i]);
                 }
+                // if we used the population adjusted scored, also keep the base scores in order
+                if (all_paths_pop_consistent && include_population_component) {
+                    std::swap(base_scores[index[i]], base_scores[i]);
+                }
                 std::swap(index[index[i]], index[i]);
                 
             }
@@ -3352,7 +3360,11 @@ namespace vg {
         for (size_t i = 0; i < scores.size(); i++) {
             Alignment aln;
             optimal_alignment(multipath_alns[i], aln);
-            cerr << "\t" << scores[i] << " " << make_pos_t(aln.path().mapping(0).position()) << endl;
+            cerr << "\t" << make_pos_t(aln.path().mapping(0).position()) << ", total score " << scores[i] << ", aln score " << aln.score();
+            if (include_population_component && all_paths_pop_consistent) {
+                cerr << ", pop score " << scores[i] - base_scores[i];
+            }
+            cerr << endl;
         }
 #endif
         
@@ -3468,6 +3480,10 @@ namespace vg {
                 
                 if (!all_paths_pop_consistent) {
                     // If we couldn't score everything, bail
+                    
+#ifdef debug_multipath_mapper
+                    cerr << "could not score pair based on population, ending population-based scoring" << endl;
+#endif
                     continue;
                 }
                 
@@ -3548,8 +3564,13 @@ namespace vg {
                 std::swap(scores[index[i]], scores[i]);
                 std::swap(cluster_pairs[index[i]], cluster_pairs[i]);
                 std::swap(multipath_aln_pairs[index[i]], multipath_aln_pairs[i]);
-                std::swap(index[index[i]], index[i]);
                 
+                // if we used the population adjusted scored, also keep the base scores in order
+                if (all_paths_pop_consistent && include_population_component) {
+                    std::swap(base_scores[index[i]], base_scores[i]);
+                }
+                
+                std::swap(index[index[i]], index[i]);
             }
         }
         
