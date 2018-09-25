@@ -3204,7 +3204,7 @@ namespace vg {
                 
                 // Now compute population scores for all the top paths
                 vector<double> alignment_pop_scores(alignments.size(), 0.0);
-                for (size_t j = 0; j < alignments.size(); j++) {
+                for (size_t j = 0; j < alignments.size() && all_paths_pop_consistent; j++) {
                     // Score each alignment if possible
                     auto pop_score = haplo_score_provider->score(alignments[j].path(), memo);
                     
@@ -3448,7 +3448,7 @@ namespace vg {
                 vector<double> base_pop_scores1(alignments1.size());
                 vector<double> base_pop_scores2(alignments2.size());
                 
-                for (size_t j = 0; j < alignments1.size(); j++) {
+                for (size_t j = 0; j < alignments1.size() && all_paths_pop_consistent; j++) {
                     // Pop score the first alignments
                     auto pop_score = haplo_score_provider->score(alignments1[j].path(), memo);
                     base_pop_scores1[j] = alignments1[j].score() + pop_score.first / log_base;
@@ -3463,7 +3463,7 @@ namespace vg {
                     all_paths_pop_consistent &= pop_score.second;
                 }
                 
-                for (size_t j = 0; j < alignments2.size(); j++) {
+                for (size_t j = 0; j < alignments2.size() && all_paths_pop_consistent; j++) {
                     // Pop score the second alignments
                     auto pop_score = haplo_score_provider->score(alignments2[j].path(), memo);
                     base_pop_scores2[j] = alignments2[j].score() + pop_score.first / log_base;
