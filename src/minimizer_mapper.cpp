@@ -161,7 +161,7 @@ void MinimizerMapper::map(Alignment& aln, AlignmentEmitter& alignment_emitter) {
 
     // Compute the covered portion of the read represented by each cluster.
     // TODO: Put this and sorting into the clusterer to deduplicate with vg cluster.
-    vector<double> read_coverage_by_cluster;
+    vector<int> read_coverage_by_cluster;
     for (size_t i = 0; i < clusters.size(); i++) {
         // For each cluster
         auto& cluster = clusters[i];
@@ -171,38 +171,57 @@ void MinimizerMapper::map(Alignment& aln, AlignmentEmitter& alignment_emitter) {
         funnel.producing_output(i);
 #endif
         
-        // Score the cluster in read coverage.
+        // Handle the coverage of an empty cluster as an edge case
+        if (cluster.empty()) {
+            read_coverage_by_cluster.push_back(0);
+            continue;
+        }
         
-        // We set bits in here to true when query anchors cover them
-        vector<bool> covered(aln.sequence().size());
-        // We use this to convert iterators to indexes
-        auto start = aln.sequence().begin();
-        
-        for (auto& hit_index : cluster) {
+        // Collect the start offset on the read for each minimizer
+        vector<size_t> minimizer_start_offsets(cluster.size());
+        for (size_t j = 0; j < cluster.size(); ++j) {
             // For each hit in the cluster, work out what anchor sequence it is from.
-            size_t source_index = seed_to_source.at(hit_index);
-
-            // The offset of a reverse minimizer is the endpoint of the kmer
-            size_t start_offset = minimizers[source_index].offset;
-            if (minimizers[source_index].is_reverse) {
-                start_offset = start_offset + 1 - minimizer_index->k();
-            }
+            auto& minimizer = minimizers[seed_to_source.at(cluster[j])];
             
-            for (size_t i = start_offset; i < start_offset + minimizer_index->k(); i++) {
-                // Set all the bits in read space for that minimizer.
-                // Each minimizr is a length-k exact match starting at a position
-                covered[i] = true;
+            // The offset of a reverse minimizer is the endpoint of the kmer
+            if (minimizer.is_reverse) {
+                minimizer_start_offsets[j] = minimizer.offset + 1 - minimizer_index->k();
+            }
+            else {
+                minimizer_start_offsets[j] = minimizer.offset;
             }
         }
         
-        // Count up the covered positions
-        size_t covered_count = 0;
-        for (auto bit : covered) {
-            covered_count += bit;
+        // Sort the offsets so we can do a sweep over them
+        sort(minimizer_start_offsets.begin(), minimizer_start_offsets.end());
+        
+        // Init the total covered bases of the read
+        int covered = 0;
+        
+        // The covered interval we're looking at
+        size_t start_offset = minimizer_start_offsets.front();
+        size_t end_offset = start_offset + minimizer_index->k();
+        
+        for (size_t j = 1; j < minimizer_start_offsets.size(); ++j) {
+            
+            // Get the interval covered by this minimizer
+            size_t start_here = minimizer_start_offsets[j];
+            size_t end_here = start_here + minimizer_index->k();
+            
+            if (start_here >= end_offset) {
+                // Record the end of the previous interval and start a new one
+                covered += (end_offset - start_offset);
+                start_offset = start_here;
+                end_offset = end_here;
+            }
+            else if (end_here > end_offset) {
+                // Extend the current interval
+                end_offset = end_here;
+            }
         }
         
-        // Turn that into a fraction
-        read_coverage_by_cluster.push_back(covered_count / (double) covered.size());
+        // Record the covered portion, including the final unrecorded interval
+        read_coverage_by_cluster.push_back(covered + (end_offset - start_offset));
         
 #ifdef TRACK_PROVENANCE
         // Record the cluster in the funnel as a group of the size of the number of items.
