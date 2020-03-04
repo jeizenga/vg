@@ -667,8 +667,9 @@ namespace vg {
         size_t reset_max_alt_mappings = max_alt_mappings;
         max_alt_mappings = 1;
         
-        // reset the memo of p-values (which we are calibrating) for any updates using the default parameter during the null mappings
-        p_value_memo.clear();
+        // also we don't need alternate alignments
+        SnarlManager* reset_snarl_manager = snarl_manager;
+        int reset_num_alt_alns = num_alt_alns;
         
         // the logarithms of the MLE estimators at each read length
         vector<double> log_mle_weibull_scales;
@@ -676,6 +677,9 @@ namespace vg {
         vector<double> log_mle_weibull_offsets;
         vector<double> mle_max_exponential_rates;
         vector<double> log_mle_max_exponential_shapes;
+        
+        // we will want to collect the thread_local memos to reset once we're done calibrating them
+        vector<decltype(p_value_memo)*> p_value_memos(omp_get_num_threads(), nullptr);
         
         for (const size_t simulated_read_length : simulated_read_lengths) {
             // compute the pseudo length of a bunch of randomly generated sequences
@@ -691,6 +695,8 @@ namespace vg {
                 if (!multipath_alns.empty()) {
                     pseudo_lengths[i] = pseudo_length(multipath_alns.front());
                 }
+                
+                p_value_memos[omp_get_thread_num()] = &p_value_memo;
             }
             
             // alternatively model lengths with a weibull distribution that has an offset
@@ -711,6 +717,13 @@ namespace vg {
             cerr << "\tmax exp rate: " << max_exp_params.first << endl;
             cerr << "\tmax exp shape: " << max_exp_params.second << endl;
 #endif
+        }
+        
+        // reset any memoized p-values that got set with the default values
+        for (auto memo : p_value_memos) {
+            if (memo) {
+                memo->clear();
+            }
         }
         
         // make a design matrix for a log regression and a linear regression
@@ -756,6 +769,8 @@ namespace vg {
         min_clustering_mem_length = reset_min_clustering_mem_length;
         min_mem_length = reset_min_mem_length;
         max_alt_mappings = reset_max_alt_mappings;
+        snarl_manager = reset_snarl_manager;
+        num_alt_alns = reset_num_alt_alns;
     }
     
     int64_t MultipathMapper::distance_between(const MultipathAlignment& multipath_aln_1,
