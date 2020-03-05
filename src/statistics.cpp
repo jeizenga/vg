@@ -178,7 +178,10 @@ double fit_fixed_shape_max_exponential(const vector<double>& x, double shape, do
     function<double(double)> log_deriv_pos_part = [&](double rate) {
         double accumulator = numeric_limits<double>::lowest();
         for (const double& val : x) {
-            accumulator = add_log(accumulator, log(val) - rate * val - log(1.0 - exp(-rate * val)));
+            if (val > 0.0) {
+                // should always be > 0, but just so we don't blow up on some very small graphs
+                accumulator = add_log(accumulator, log(val) - rate * val - log(1.0 - exp(-rate * val)));
+            }
         }
         accumulator += log(shape - 1.0);
         return add_log(accumulator, log(x.size() / rate));
@@ -187,7 +190,10 @@ double fit_fixed_shape_max_exponential(const vector<double>& x, double shape, do
     function<double(double)> log_deriv2_neg_part = [&](double rate) {
         double accumulator = numeric_limits<double>::lowest();
         for (const double& val : x) {
-            accumulator = add_log(accumulator, 2.0 * log(val) - rate * val - 2.0 * log(1.0 - exp(-rate * val)));
+            if (val > 0.0) {
+                // should always be > 0, but just so we don't blow up on some very small graphs
+                accumulator = add_log(accumulator, 2.0 * log(val) - rate * val - 2.0 * log(1.0 - exp(-rate * val)));
+            }
         }
         accumulator += log(shape - 1.0);
         return add_log(accumulator, log(x.size() / (rate * rate)));
