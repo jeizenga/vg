@@ -199,7 +199,7 @@ double fit_fixed_shape_max_exponential(const vector<double>& x, double shape, do
         return add_log(accumulator, log(x.size() / (rate * rate)));
     };
     
-    size_t max_iters = 100000;
+    size_t max_iters = 1000;
     size_t iter = 0;
     
     // use Newton's method to find the MLE
@@ -256,7 +256,7 @@ pair<double, double> fit_max_exponential(const vector<double>& x,
                                          double tolerance) {
 
     
-    size_t max_iters = 100000;
+    size_t max_iters = 1000;
     size_t iter = 0;
     
     // alternate maximizing shape and rate until convergence

@@ -719,7 +719,7 @@ namespace vg {
 #endif
         }
         
-        // reset any memoized p-values that got set with the default values
+        // reset any memoized p-values that got set with the default values for parameters we're calibrating
         for (auto memo : p_value_memos) {
             if (memo) {
                 memo->clear();
