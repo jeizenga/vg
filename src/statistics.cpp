@@ -199,10 +199,13 @@ double fit_fixed_shape_max_exponential(const vector<double>& x, double shape, do
         return add_log(accumulator, log(x.size() / (rate * rate)));
     };
     
+    size_t max_iters = 100000;
+    size_t iter = 0;
+    
     // use Newton's method to find the MLE
     double rate = 1.0 / x_max;
     double prev_rate = rate * (1.0 + 10.0 * tolerance);
-    while (abs(prev_rate / rate - 1.0) > tolerance) {
+    while (abs(prev_rate / rate - 1.0) > tolerance && iter < max_iters) {
         prev_rate = rate;
         double log_d2 = log_deriv2_neg_part(rate);
         double log_d_pos = log_deriv_pos_part(rate);
@@ -215,6 +218,8 @@ double fit_fixed_shape_max_exponential(const vector<double>& x, double shape, do
         else {
             rate -= exp(subtract_log(log_d_neg, log_d_pos) - log_d2);
         }
+        
+        ++iter;
     }
     return rate;
 }
@@ -250,20 +255,25 @@ double fit_fixed_rate_max_exponential(const vector<double>& x, double rate, doub
 pair<double, double> fit_max_exponential(const vector<double>& x,
                                          double tolerance) {
 
+    
+    size_t max_iters = 100000;
+    size_t iter = 0;
+    
     // alternate maximizing shape and rate until convergence
     
     double shape = 1.0;
     double rate = fit_fixed_shape_max_exponential(x, shape, tolerance / 2.0);
     double prev_shape = shape + 10.0 * tolerance;
     double prev_rate = rate + 10.0 * tolerance;
-    while (abs(prev_rate / rate - 1.0) > tolerance / 2.0
-           || abs(prev_shape / shape - 1.0) > tolerance / 2.0) {
+    while ((abs(prev_rate / rate - 1.0) > tolerance / 2.0
+            || abs(prev_shape / shape - 1.0) > tolerance / 2.0)
+           && iter < max_iters) {
         prev_shape = shape;
         prev_rate = rate;
         
         shape = fit_fixed_rate_max_exponential(x, rate, tolerance / 2.0);
         rate = fit_fixed_shape_max_exponential(x, shape, tolerance / 2.0);
-        
+        ++iter;
     }
     
     return pair<double, double>(rate, shape);
@@ -316,7 +326,8 @@ double max_exponential_log_likelihood(const vector<double>& x, double rate, doub
     double accumulator_2 = 0.0;
     for (const double& val : x) {
         if (val <= location) {
-            return numeric_limits<double>::lowest();
+            // this should be -inf, but doing this avoids some numerical problems
+            continue;
         }
         accumulator_1 += log(1.0 - exp(-rate * (val - location)));
         accumulator_2 += (val - location);
