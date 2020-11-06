@@ -119,7 +119,7 @@ namespace vg {
         bool adjust_for_base_quality;
         
         /// Dynamic programming matrices for each node
-        vector<BAMatrix*> banded_matrices;
+        vector<unique_ptr<BAMatrix>> banded_matrices;
         
         /// Map from node IDs to the index used in internal vectors
         unordered_map<int64_t, int64_t> node_id_to_idx;
@@ -198,11 +198,11 @@ namespace vg {
         vector<BAMatrix*> seeds;
         
         /// DP matrix
-        IntType* match;
+        vector<IntType> match;
         /// DP matrix
-        IntType* insert_col;
+        vector<IntType> insert_col;
         /// DP matrix
-        IntType* insert_row;
+        vector<IntType> insert_row;
         
         /// Debugging function
         void print_matrix(const HandleGraph& graph, matrix_t which_mat);
