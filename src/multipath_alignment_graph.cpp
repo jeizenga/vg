@@ -4134,21 +4134,33 @@ namespace vg {
     
     void MultipathAlignmentGraph::align(const Alignment& alignment, const HandleGraph& align_graph, const GSSWAligner* aligner,
                                         bool score_anchors_as_matches, size_t max_alt_alns, bool dynamic_alt_alns, size_t max_gap,
-                                        double pessimistic_tail_gap_multiplier, size_t band_padding, multipath_alignment_t& multipath_aln_out,
-                                        bool allow_negative_scores) {
+                                        double pessimistic_tail_gap_multiplier, bool simplify_topologies, size_t unmergeable_len,
+                                        size_t band_padding, multipath_alignment_t& multipath_aln_out, bool allow_negative_scores) {
         
         // don't dynamically choose band padding, shim constant value into a function type
         function<size_t(const Alignment&,const HandleGraph&)> constant_padding = [&](const Alignment& seq, const HandleGraph& graph) {
             return band_padding;
         };
-        align(alignment, align_graph, aligner, score_anchors_as_matches, max_alt_alns, dynamic_alt_alns,
-              max_gap, pessimistic_tail_gap_multiplier, constant_padding, multipath_aln_out, allow_negative_scores);
+        align(alignment,
+              align_graph,
+              aligner,
+              score_anchors_as_matches,
+              max_alt_alns,
+              dynamic_alt_alns,
+              max_gap,
+              pessimistic_tail_gap_multiplier,
+              simplify_topologies,
+              unmergeable_len,
+              constant_padding,
+              multipath_aln_out,
+              allow_negative_scores);
     }
     
     void MultipathAlignmentGraph::align(const Alignment& alignment, const HandleGraph& align_graph, const GSSWAligner* aligner,
                                         bool score_anchors_as_matches, size_t max_alt_alns, bool dynamic_alt_alns, size_t max_gap,
-                                        double pessimistic_tail_gap_multiplier, function<size_t(const Alignment&,const HandleGraph&)> band_padding_function,
-                                        multipath_alignment_t& multipath_aln_out, const bool allow_negative_scores) {
+                                        double pessimistic_tail_gap_multiplier, bool simplify_topologies, size_t unmergeable_len,
+                                        function<size_t(const Alignment&,const HandleGraph&)> band_padding_function,
+                                        multipath_alignment_t& multipath_aln_out, bool allow_negative_scores) {
         
         // Can only align if edges are present.
         assert(has_reachability_edges);
@@ -4463,6 +4475,27 @@ namespace vg {
         
         // Now do the tails
         
+        auto get_tail_length = [&](const path_t& path, bool left_tail) {
+            // to length without soft-clips
+            size_t to_len = 0;
+            for (int i = 0; i < path.mapping_size(); ++i) {
+                const auto& mapping = path.mapping(i);
+                for (int j = 0; j < mapping.edit_size(); ++j) {
+                    const auto& edit = mapping.edit(j);
+                    if (edit.from_length() == 0 &&
+                        ((i == 0 && j == 0 && left_tail)
+                         || (i + 1 == path.mapping_size() && j + 1 == mapping.edit_size() && !left_tail))) {
+                        // soft clip, skip
+                        continue;
+                    }
+                    to_len += edit.to_length();
+                }
+            }
+            return max<size_t>(to_len, path_from_length(path));
+        };
+        
+        unordered_set<size_t> prohibited_merges;
+        
         // We need to know what subpaths are real sources
         unordered_set<size_t> sources;
         
@@ -4475,7 +4508,7 @@ namespace vg {
         // Handle the right tails
         for (auto& kv : tail_alignments[true]) {
             // For each sink subpath number
-            const size_t& j = kv.first;
+            size_t j = kv.first;
             // And the tail alignments from it
             vector<Alignment>& alt_alignments = kv.second;
             
@@ -4521,6 +4554,26 @@ namespace vg {
                 cerr << debug_string(*tail_subpath) << endl;
 #endif
             }
+            
+            if (deduplicated.size() == 1 && unmergeable_len) {
+                // this is a mergeable tail, check whether we want to prohibit the merge
+                handle_t handle = align_graph.get_handle(id(end_pos), is_rev(end_pos));
+                if (offset(end_pos) == align_graph.get_length(handle)) {
+                    // the anchor ends at the end of a node
+                    int edge_count = 0;
+                    align_graph.follow_edges(handle, false, [&](const handle_t& next) {
+                        ++edge_count;
+                        return edge_count < 2;
+                    });
+                    if (edge_count >= 2) {
+                        // this is a branch point in the graph (i.e. there were other paths possible)
+                        if (get_tail_length(multipath_aln_out.subpath().back().path(), false) <= unmergeable_len) {
+                            // the tail alignment is short, don't merge them into one subpath
+                            prohibited_merges.insert(j);
+                        }
+                    }
+                }
+            }
         }
                 
         // Now handle the left tails.
@@ -4535,7 +4588,7 @@ namespace vg {
                 // remove alignments with the same path
                 auto deduplicated = deduplicate_alt_alns(alt_alignments, true, false);
                                 
-                const path_mapping_t& first_mapping = path_node.path.mapping(0);
+                const auto& first_position = path_node.path.mapping(0).position();
                 for (auto& tail_alignment : deduplicated) {
                     subpath_t* tail_subpath = multipath_aln_out.add_subpath();
                     *tail_subpath->mutable_path() = move(tail_alignment.first);
@@ -4551,10 +4604,30 @@ namespace vg {
                     path_mapping_t* final_mapping = tail_subpath->mutable_path()->mutable_mapping(tail_subpath->path().mapping_size() - 1);
                     if (tail_subpath->path().mapping_size() == 1 && final_mapping->edit_size() == 1
                         && final_mapping->edit(0).from_length() == 0 && final_mapping->edit(0).to_length() > 0
-                        && final_mapping->position().node_id() != first_mapping.position().node_id()) {
+                        && final_mapping->position().node_id() != first_position.node_id()) {
                         // this is a pure soft clip on the end of the previous node, so we move it over to the
                         // beginning of the match node to match invariants in rest of code base
-                        *final_mapping->mutable_position() = first_mapping.position();
+                        *final_mapping->mutable_position() = first_position;
+                    }
+                }
+                
+                if (deduplicated.size() == 1 && unmergeable_len) {
+                    // this is a mergeable tail, check whether we want to prohibit the merge
+                    if (first_position.offset() == 0) {
+                        // the anchor ends at the beginning of a node
+                        int edge_count = 0;
+                        auto handle = align_graph.get_handle(first_position.node_id(), first_position.is_reverse());
+                        align_graph.follow_edges(handle, true, [&](const handle_t& prev) {
+                            ++edge_count;
+                            return edge_count < 2;
+                        });
+                        if (edge_count >= 2) {
+                            // this is a branch point in the graph (i.e. there were other paths possible)
+                            if (get_tail_length(multipath_aln_out.subpath().back().path(), true) <= unmergeable_len) {
+                                // the tail alignment is short, don't merge them into one subpath
+                                prohibited_merges.insert(multipath_aln_out.subpath_size() - 1);
+                            }
+                        }
                     }
                 }
             }
@@ -4564,6 +4637,19 @@ namespace vg {
 #endif
                 multipath_aln_out.add_start(j);
             }
+        }
+        
+        if (simplify_topologies) {
+#ifdef debug_multipath_alignment
+            cerr << "merging non-branching subpaths" << endl;
+            size_t num_pre_merge = multipath_aln_out.subpath_size();
+#endif
+            
+            merge_non_branching_subpaths(multipath_aln_out, &prohibited_merges);
+            
+#ifdef debug_multipath_alignment
+            cerr << "reduce from " << num_pre_merge << " to " << multipath_aln_out.subpath_size() << " subpaths during merge" << endl;
+#endif
         }
     }
     

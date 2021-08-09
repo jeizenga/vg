@@ -195,8 +195,8 @@ namespace vg {
         /// order, even if this MultipathAlignmentGraph is. You MUST sort it
         /// with topologically_order_subpaths() before trying to run DP on it.
         void align(const Alignment& alignment, const HandleGraph& align_graph, const GSSWAligner* aligner, bool score_anchors_as_matches,
-                   size_t max_alt_alns, bool dynamic_alt_alns, size_t max_gap, double pessimistic_tail_gap_multiplier, size_t band_padding,
-                   multipath_alignment_t& multipath_aln_out, bool allow_negative_scores = false);
+                   size_t max_alt_alns, bool dynamic_alt_alns, size_t max_gap, double pessimistic_tail_gap_multiplier, bool simplify_topologies,
+                   size_t unmergeable_len, size_t band_padding, multipath_alignment_t& multipath_aln_out, bool allow_negative_scores = false);
         
         /// Do intervening and tail alignments between the anchoring paths and
         /// store the result in a multipath_alignment_t. Reachability edges must
@@ -211,8 +211,8 @@ namespace vg {
         /// order, even if this MultipathAlignmentGraph is. You MUST sort it
         /// with topologically_order_subpaths() before trying to run DP on it.
         void align(const Alignment& alignment, const HandleGraph& align_graph, const GSSWAligner* aligner, bool score_anchors_as_matches,
-                   size_t max_alt_alns, bool dynamic_alt_alns, size_t max_gap, double pessimistic_tail_gap_multiplier,
-                   function<size_t(const Alignment&,const HandleGraph&)> band_padding_function,
+                   size_t max_alt_alns, bool dynamic_alt_alns, size_t max_gap, double pessimistic_tail_gap_multiplier, bool simplify_topologies,
+                   size_t unmergeable_len, function<size_t(const Alignment&,const HandleGraph&)> band_padding_function,
                    multipath_alignment_t& multipath_aln_out, bool allow_negative_scores = false);
         
         /// Converts a MultipathAlignmentGraph to a GraphViz Dot representation, output to the given ostream.
