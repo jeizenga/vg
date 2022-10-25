@@ -133,15 +133,13 @@ using namespace std;
     }
     
     void Surjector::surject_internal(const Alignment* source_aln, const multipath_alignment_t* source_mp_aln,
-                                     vector<Alignment>* alns_out, vector<multipath_alignment_t>* mp_alns_out,
                                      const unordered_set<path_handle_t>& paths,
-                                     vector<tuple<string, int64_t, bool>>& positions_out, bool all_paths,
+                                     vector<SurjectedAlignment>& alns_out, bool all_paths,
                                      bool allow_negative_scores, bool preserve_deletions) const {
 
         
         // we need one and only one data type: Alignment or multipath_alignment_t
-        assert(!(source_aln && source_mp_aln));
-        assert((source_aln && alns_out) || (source_mp_aln && mp_alns_out));
+        assert(!(source_aln && source_mp_aln) && (source_aln || source_mp_aln));
                 
 #ifdef debug_anchored_surject
         cerr << "surjecting alignment: ";
@@ -294,54 +292,40 @@ using namespace std;
         
         
         // the surjected alignment for each path we overlapped
-        unordered_map<pair<path_handle_t, bool>, pair<Alignment, pair<step_handle_t, step_handle_t>>> aln_surjections;
-        unordered_map<pair<path_handle_t, bool>, pair<multipath_alignment_t, pair<step_handle_t, step_handle_t>>> mp_aln_surjections;
+        vector<SurjectedAlignment> surjections;
         for (pair<const pair<path_handle_t, bool>, pair<vector<path_chunk_t>, vector<pair<step_handle_t, step_handle_t>>>>& surj_record : path_overlapping_anchors) {
             
-            // to hold the path interval that corresponds to the path we surject to
-            pair<step_handle_t, step_handle_t> path_range;
+            SurjectedAlignment surjection;
+            
             if (!preserve_deletions && source_aln) {
                 // unspliced GAM -> GAM surjection
-                auto surjection = realigning_surject(&memoizing_graph, *source_aln, surj_record.first.first, surj_record.first.second,
-                                                     surj_record.second.first, surj_record.second.second, path_range, allow_negative_scores);
-                if (surjection.path().mapping_size() != 0) {
-                    aln_surjections[surj_record.first] = make_pair(move(surjection), path_range);
-                }
+                surjection = realigning_surject(&memoizing_graph, *source_aln, surj_record.first.first, surj_record.first.second,
+                                                surj_record.second.first, surj_record.second.second, path_range, allow_negative_scores);
+                
             }
             else if (source_aln) {
                 // spliced GAM -> GAM surjection
-                auto surjection = spliced_surject(&memoizing_graph, source_aln->sequence(), source_aln->quality(),
-                                                  source_aln->mapping_quality(), surj_record.first.first, surj_record.first.second,
-                                                  surj_record.second.first, surj_record.second.second,
-                                                  connections[surj_record.first], path_range,
-                                                  allow_negative_scores, preserve_deletions);
-                if (surjection.subpath_size() != 0) {
-                    // this internal method is written for multipath alignments, so we need to convert to standard alignments
-                    aln_surjections[surj_record.first] = make_pair(Alignment(), path_range);
-                    auto& surjected_aln = aln_surjections[surj_record.first].first;
-                    optimal_alignment(surjection, surjected_aln, allow_negative_scores);
-                    transfer_read_metadata(*source_aln, surjected_aln);
-                }
+                surjection = spliced_surject(&memoizing_graph, source_aln->sequence(), source_aln->quality(),
+                                             source_aln->mapping_quality(), surj_record.first.first, surj_record.first.second,
+                                             surj_record.second.first, surj_record.second.second,
+                                             connections[surj_record.first], path_range,
+                                             allow_negative_scores, preserve_deletions);
             }
             else {
                 // surjecting a multipath alignment (they always use the spliced pathway even if not
                 // doing spliced alignment)
-                auto surjection = spliced_surject(&memoizing_graph, source_mp_aln->sequence(),
+                surjection = spliced_surject(&memoizing_graph, source_mp_aln->sequence(),
                                                   source_mp_aln->quality(), source_mp_aln->mapping_quality(),
                                                   surj_record.first.first, surj_record.first.second,
                                                   surj_record.second.first, surj_record.second.second,
                                                   connections[surj_record.first], path_range,
                                                   allow_negative_scores, preserve_deletions);
-                if (surjection.subpath_size() != 0) {
-                    // the surjection was a success
-                    
-                    // copy over annotations
-                    // TODO: also redundantly copies over sequence and quality
-                    transfer_read_metadata(*source_mp_aln, surjection);
-                    
-                    // record the result for this path
-                    mp_aln_surjections[surj_record.first] = make_pair(move(surjection), path_range);
-                }
+            }
+            
+            // FIXME: how to make sure the annotations get transferred over?
+            
+            if (!surjection.cigar.empty()) {
+                surjections.emplace_back(move(surjection));
             }
         }
         
@@ -2833,12 +2817,11 @@ using namespace std;
         return surjected;
     }
 
-    Alignment Surjector::realigning_surject(const PathPositionHandleGraph* path_position_graph, const Alignment& source,
-                                            const path_handle_t& path_handle, bool rev_strand, const vector<path_chunk_t>& path_chunks,
-                                            const vector<pair<step_handle_t, step_handle_t>>& ref_chunks,
-                                            pair<step_handle_t, step_handle_t>& path_range_out, bool allow_negative_scores,
-                                            bool preserve_N_alignments, bool sinks_are_anchors, bool sources_are_anchors,
-                                            vector<pair<step_handle_t, step_handle_t>>* all_path_ranges_out) const {
+    SurjectedAlignment Surjector::realigning_surject(const PathPositionHandleGraph* path_position_graph, const Alignment& source,
+                                                     const path_handle_t& path_handle, bool rev_strand, const vector<path_chunk_t>& path_chunks,
+                                                     const vector<pair<step_handle_t, step_handle_t>>& ref_chunks,
+                                                     bool allow_negative_scores, bool preserve_N_alignments, bool sinks_are_anchors,
+                                                     bool sources_are_anchors, vector<pair<step_handle_t, step_handle_t>>* all_path_ranges_out) const {
         
 #ifdef debug_anchored_surject
         cerr << "using overlap chunks on path " << graph->get_path_name(path_handle) << " strand " << rev_strand << ", performing realigning surjection" << endl;
@@ -2849,7 +2832,7 @@ using namespace std;
 #endif
         
         // the alignment we will fill out
-        Alignment surjected;
+        SurjectedAlignment surjected;
         
         // find the end-inclusive interval of the ref path we need to consider
         pair<size_t, size_t> ref_path_interval = compute_path_interval(path_position_graph, source,
@@ -2869,6 +2852,7 @@ using namespace std;
             }
         }
         
+        multipath_alignment_t mp_aln;
         if (path_chunks.size() == 0) {
 #ifdef debug_anchored_surject
             cerr << "no path chunks provided, surjecting as unmapped" << endl;
@@ -2883,10 +2867,10 @@ using namespace std;
 #endif
             
             // just copy it over
-            surjected.set_sequence(source.sequence());
-            surjected.set_quality(source.quality());
-            *surjected.mutable_path() = path_chunks.front().second;
-            surjected.set_score(get_aligner(!source.quality().empty())->score_contiguous_alignment(surjected));
+            // FIXME: need to get the path pos here, or alternatively remove the pos from CIGAR conversion
+            surjected.cigar = cigar_against_path(source, rev_strand, pos,
+                                                 path_position_graph->get_length(path_handle), 0);
+            surjected.score = get_aligner(!source.quality().empty())->score_contiguous_alignment(surjected));
             
         }
         else {
@@ -2933,7 +2917,7 @@ using namespace std;
                         << subgraph_bases << " bp strand split subgraph for read " << source.name()
                         << "; suppressing further warnings." << endl;
                 }
-                return move(make_null_alignment(source)); 
+                return surjected;
             }
             
             // compute the connectivity between the path chunks
@@ -2950,7 +2934,7 @@ using namespace std;
             
             // we don't overlap this reference path at all or we filtered out all of the path chunks, so just make a sentinel
             if (mp_aln_graph.empty()) {
-                return move(make_null_alignment(source));
+                return surjected;
             }
             
             // TODO: is this necessary in a linear graph?
@@ -2965,7 +2949,6 @@ using namespace std;
             }
             
             // align the intervening segments and store the result in a multipath alignment
-            multipath_alignment_t mp_aln;
             mp_aln_graph.align(source, split_path_graph, get_aligner(),
                                false,                                    // anchors as matches
                                1,                                        // max alt alns
@@ -3006,9 +2989,9 @@ using namespace std;
                 cerr << "WARNING: multipath alignment for surjection of " << source.name() << " with sequence " << " failed to validate" << endl;
             }
 #endif
-            // concatenate the subpaths either locally or globally, depending on whether we're
-            // allowing negative scores
-            optimal_alignment(mp_aln, surjected, allow_negative_scores);
+//            // concatenate the subpaths either locally or globally, depending on whether we're
+//            // allowing negative scores
+//            optimal_alignment(mp_aln, surjected, allow_negative_scores);
         }
         
         const auto& surj_path = surjected.path();

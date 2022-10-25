@@ -22,6 +22,14 @@ namespace vg {
 
 using namespace std;
 
+    struct SurjectedAlignment {
+        vector<pair<int, char>> cigar = vector<pair<int, char>>();
+        string path_name = "";
+        int64_t path_pos = -1;
+        bool path_rev = false;
+        int64_t score = 0;
+    };
+
     class Surjector : public AlignerClient {
     public:
         
