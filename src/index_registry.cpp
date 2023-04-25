@@ -413,7 +413,7 @@ bool execute_in_fork(const function<void(void)>& exec) {
     else {
         // This is the parent
         if (IndexingParameters::verbosity != IndexingParameters::None) {
-            cerr << "[IndexRegistry] Forked into child process with PID " << pid << "." << endl;
+            cerr << "[IndexRegistry]: Forked into child process with PID " << pid << "." << endl;
         }
     }
     
@@ -437,7 +437,7 @@ bool execute_in_fork(const function<void(void)>& exec) {
     assert(WIFEXITED(child_stat));
     
     if (WEXITSTATUS(child_stat) != 0) {
-        cerr << "warning:[IndexRegistry] child process " << pid << " failed with status " << child_stat << " representing exit code " << WEXITSTATUS(child_stat) << endl;
+        cerr << "warning:[IndexRegistry] Child process " << pid << " failed with status " << child_stat << " representing exit code " << WEXITSTATUS(child_stat) << endl;
         return false;
     }
     
@@ -2806,6 +2806,10 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
                                    bool have_haplotype_tx,
                                    bool making_hsts) {
     
+#ifdef debug_index_registry_recipes
+        cerr << "emulating vg rna with options gbwt? " << have_gbwt << ", gbz? " << have_gbz << ", haplo txs? " << have_haplotype_tx << ", to make hst panel? " << making_hsts << endl;
+#endif
+        
         // either just graph, or graph and rpvg indexes
         assert(constructing.size() == 1 || constructing.size() == 3);
         // need haplotypes with meaningful path names for lifted haplotype transcripts
@@ -2879,6 +2883,7 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
             
             assert(gbwt_filenames.size() == 1);
             gbwt_filename = gbwt_filenames.front();
+            graph_filenames = inputs[2]->get_filenames();
         }
         else if (have_gbz) {
             auto gbz_filenames = inputs[0]->get_filenames();
@@ -2893,6 +2898,24 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
             tx_filenames = inputs[0]->get_filenames();
             graph_filenames = inputs[1]->get_filenames();
         }
+        
+#ifdef debug_index_registry_recipes
+        cerr << "input filenames" << endl;
+        cerr << "graphs:" << endl;
+        for (auto f : graph_filenames) {
+            cerr << '\t' << f << endl;
+        }
+        cerr << "transcripts:" << endl;
+        for (auto f : tx_filenames) {
+            cerr << '\t' << f << endl;
+        }
+        cerr << "haplotype transcripts:" << endl;
+        for (auto f : haplo_tx_filenames) {
+            cerr << '\t' << f << endl;
+        }
+        cerr << "gbwt: " << gbwt_filename << endl;
+        cerr << "gbz: " << gbz_filename << endl;
+#endif
         
         // ensure that there is one graph, or that the transcript and graph files are 1-to-1
         if (!graph_filenames.empty()) {
@@ -2945,7 +2968,7 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
             
             string hst_gbwt_name, info_table_name;
             if (making_hsts) {
-                if (tx_graph_name.size() != 1) {
+                if (tx_graph_names.size() != 1) {
                     // multiple components, so make a temp file that we will merge later
                     hst_gbwt_name = temp_file::create();
                 }
@@ -5090,23 +5113,7 @@ IndexingPlan IndexRegistry::make_plan(const IndexGroup& end_products) const {
     sort(plan.steps.begin(), plan.steps.end(), [&](const RecipeName& a, const RecipeName& b) {
         return dep_order_of_identifier[a.first] < dep_order_of_identifier[b.first];
     });
-    
-    // check that all of the inputs have been used
-    for (const auto& index_name : completed_indexes()) {
-        bool found = false;
-        for (const auto& recipe_name : plan.steps) {
-            const auto& recipe = get_recipe(recipe_name);
-            if (recipe.input_group().count(index_name)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            cerr << "warning:[IndexRegistry] Indexing plan did not use provided input " << index_name << "." << endl;
-            
-        }
-    }
-    
+        
 #ifdef debug_index_registry
     cerr << "plan before applying generalizations:" << endl;
     for (auto plan_elem : plan.steps) {
@@ -5131,6 +5138,25 @@ IndexingPlan IndexRegistry::make_plan(const IndexGroup& end_products) const {
     plan.steps.resize(remove_if(plan.steps.begin(), plan.steps.end(), [&](const RecipeName& recipe_choice) {
         return all_finished(recipe_choice.first);
     }) - plan.steps.begin());
+    
+    // check that all of the inputs have been used
+    for (const auto& index_name : completed_indexes()) {
+        if (end_products.count(index_name)) {
+            // we directly provided one of the final products
+            continue;
+        }
+        bool found = false;
+        for (const auto& recipe_name : plan.steps) {
+            const auto& recipe = get_recipe(recipe_name);
+            if (recipe.input_group().count(index_name)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            cerr << "warning:[IndexRegistry] Indexing plan did not use provided input " << index_name << "." << endl;
+        }
+    }
     
     // The plan has methods that can come back and modify the registry.
     // We're not going to call any of them, but we have to hand off a non-const
