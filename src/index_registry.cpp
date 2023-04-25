@@ -409,10 +409,11 @@ bool execute_in_fork(const function<void(void)>& exec) {
                 
         // end the child process successfully
         exit(0);
-    } else {
+    }
+    else {
         // This is the parent
         if (IndexingParameters::verbosity != IndexingParameters::None) {
-            cerr << "[IndexRegistry] forked child " << pid << endl;
+            cerr << "[IndexRegistry] Forked into child process with PID " << pid << "." << endl;
         }
     }
     
@@ -461,12 +462,14 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
     registry.register_index("Reference GFA", "gfa");
     registry.register_index("Reference GFA w/ Haplotypes", "haplo.gfa");
     registry.register_index("GTF/GFF", "gff");
+    registry.register_index("Haplotype GTF/GFF", "haplo.gff");
     
     /// Chunked inputs
     registry.register_index("Chunked Reference FASTA", "chunked.fasta");
     registry.register_index("Chunked VCF", "chunked.vcf.gz");
     registry.register_index("Chunked VCF w/ Phasing", "phased.chunked.vcf.gz");
     registry.register_index("Chunked GTF/GFF", "chunked.gff");
+    registry.register_index("Chunked Haplotype GTF/GFF", "haplo.chunked.gff");
     
     /// True indexes
     registry.register_index("VG", "vg");
@@ -506,6 +509,7 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
     registry.register_index("Spliced Distance Index", "spliced.dist");
     
     registry.register_index("GBWTGraph", "gg");
+    registry.register_index("GBZ", "gbz");
     registry.register_index("Giraffe GBZ", "giraffe.gbz");
     
     registry.register_index("Minimizers", "min");
@@ -2797,22 +2801,44 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
                                    const IndexingPlan* plan,
                                    AliasGraph& alias_graph,
                                    const IndexGroup& constructing,
+                                   bool have_gbwt,
+                                   bool have_gbz,
+                                   bool have_haplotype_tx,
                                    bool making_hsts) {
     
+        // either just graph, or graph and rpvg indexes
         assert(constructing.size() == 1 || constructing.size() == 3);
-        assert(inputs.size() == 2 || inputs.size() == 3);
-        bool have_gbwt = (inputs.size() == 3);
-        if (making_hsts) {
-            assert(have_gbwt);
+        // need haplotypes with meaningful path names for lifted haplotype transcripts
+        if (have_haplotype_tx) {
+            assert(have_gbz);
         }
+        // need some haplotype source
+        if (making_hsts) {
+            assert(have_gbwt || have_gbz);
+        }
+        // no confusion about which haplotypes
+        assert(!(have_gbz && have_gbwt));
+        // all combinations have 2 or 3 inputs
+        assert(inputs.size() == 2 || inputs.size() == 3);
         
         if (IndexingParameters::verbosity != IndexingParameters::None) {
-            if (making_hsts) {
-                cerr << "[IndexRegistry]: Constructing haplotype-transcript GBWT and finishing spliced VG." << endl;
+            if (!have_gbz) {
+                if (making_hsts) {
+                    cerr << "[IndexRegistry]: Constructing haplotype-transcript GBWT and finishing spliced VG." << endl;
+                }
+                else {
+                    cerr << "[IndexRegistry]: Finishing spliced VG." << endl;
+                }
             }
             else {
-                cerr << "[IndexRegistry]: Finishing spliced VG." << endl;
+                if (making_hsts) {
+                    cerr << "[IndexRegistry]: Constructing haplotype-transcript GBWT and building spliced graph." << endl;
+                }
+                else {
+                    cerr << "[IndexRegistry]: Building spliced graph." << endl;
+                }
             }
+            
             if (IndexingParameters::verbosity >= IndexingParameters::Debug) {
                 gbwt::Verbosity::set(gbwt::Verbosity::BASIC);
             }
@@ -2844,28 +2870,23 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
         auto& tx_graph_names = all_outputs[making_hsts ? 1 : 0];
         //auto& tx_table_names = all_outputs[2];
         
-        vector<string> tx_filenames, gbwt_filenames, graph_filenames;
+        vector<string> haplo_tx_filenames, tx_filenames, graph_filenames;
         string gbwt_filename;
-        unique_ptr<gbwt::GBWT> haplotype_index;
-        vector<string> gbwt_chunk_names;
+        string gbz_filename;
         if (have_gbwt) {
             tx_filenames = inputs[0]->get_filenames();
             auto gbwt_filenames = inputs[1]->get_filenames();
-            graph_filenames = inputs[2]->get_filenames();
             
             assert(gbwt_filenames.size() == 1);
             gbwt_filename = gbwt_filenames.front();
-            
-            haplotype_index = vg::io::VPKG::load_one<gbwt::GBWT>(gbwt_filename);
-            
-            // TODO: i can't find where in the building code you actually ensure this...
-            assert(haplotype_index->bidirectional());
-            
-            if (making_hsts) {
-                // the HST tables
-                all_outputs[2].resize(graph_filenames.size());
-                
-                gbwt_chunk_names.resize(graph_filenames.size());
+        }
+        else if (have_gbz) {
+            auto gbz_filenames = inputs[0]->get_filenames();
+            assert(gbz_filenames.size() == 1);
+            gbz_filename = gbz_filenames.front();
+            tx_filenames = inputs[1]->get_filenames();
+            if (have_haplotype_tx) {
+                haplo_tx_filenames = inputs[2]->get_filenames();
             }
         }
         else {
@@ -2873,70 +2894,142 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
             graph_filenames = inputs[1]->get_filenames();
         }
         
-        tx_graph_names.resize(graph_filenames.size());
+        // ensure that there is one graph, or that the transcript and graph files are 1-to-1
+        if (!graph_filenames.empty()) {
+            assert(tx_filenames.size() == graph_filenames.size() || graph_filenames.size() == 1);
+        }
+        
+        unique_ptr<gbwtgraph::GBZ> gbz;
+        unique_ptr<gbwt::GBWT> haplotype_index;
+        vector<string> hst_gbwt_chunk_names;
+        
+        if (have_gbwt) {
+            haplotype_index = vg::io::VPKG::load_one<gbwt::GBWT>(gbwt_filename);
+            if (making_hsts) {
+                // the HST tables
+                all_outputs[2].resize(graph_filenames.size());
+                hst_gbwt_chunk_names.resize(graph_filenames.size());
+            }
+        }
+        else if (have_gbz) {
+            gbz = vg::io::VPKG::load_one<gbwtgraph::GBZ>(gbz_filename);
+            // we duplicate the GBWT, but leave the GBZ in memory so we can convert it to the graph we
+            // need later
+            // TODO: wasteful of time and memory
+            haplotype_index = make_unique<gbwt::GBWT>(gbz->index);
+            if (making_hsts) {
+                // the HST tables
+                all_outputs[2].resize(1);
+                hst_gbwt_chunk_names.resize(1);
+            }
+        }
+        
+        if (haplotype_index.get()) {
+            // TODO: i can't find where in the building code you actually ensure this...
+            assert(haplotype_index->bidirectional());
+        }
+        
+        if (have_gbz) {
+            // GBZ is always in one chunk
+            tx_graph_names.resize(1);
+        }
+        else {
+            tx_graph_names.resize(graph_filenames.size());
+        }
         
         auto haplo_tx_job = [&](int64_t i) {
             
-            string tx_graph_name = plan->output_filepath(output_tx_graph, i, graph_filenames.size());
+            string tx_graph_name = plan->output_filepath(output_tx_graph, i, tx_graph_names.size());
             ofstream tx_graph_outfile;
             init_out(tx_graph_outfile, tx_graph_name);
             
-            string gbwt_name, info_table_name;
+            string hst_gbwt_name, info_table_name;
             if (making_hsts) {
-                if (graph_filenames.size() != 1) {
+                if (tx_graph_name.size() != 1) {
                     // multiple components, so make a temp file that we will merge later
-                    gbwt_name = temp_file::create();
+                    hst_gbwt_name = temp_file::create();
                 }
                 else {
                     // one component, so we will actually save the output
-                    gbwt_name = plan->output_filepath(output_haplo_tx, i, graph_filenames.size());
+                    hst_gbwt_name = plan->output_filepath(output_haplo_tx, i, tx_graph_names.size());
                 }
+                info_table_name = plan->output_filepath(output_tx_table, i, tx_graph_names.size());
             }
             
-            int64_t j = tx_filenames.size() > 1 ? i : 0;
+            bool any_nonempty_tx_file = false;
+            vector<ifstream> tx_filestreams;
+            if (tx_graph_names.size() > 1) {
+                // get the matching transcript file (we ensure they are matched 1-to-1)
+                tx_filestreams.emplace_back();
+                init_in(tx_filestreams.back(), tx_filenames[i]);
+                any_nonempty_tx_file = any_nonempty_tx_file || transcript_file_nonempty(tx_filenames[i]);
+            }
+            else {
+                // get all transcript files
+                for (auto& tx_filename : tx_filenames) {
+                    tx_filestreams.emplace_back();
+                    init_in(tx_filestreams.back(), tx_filename);
+                    any_nonempty_tx_file = any_nonempty_tx_file || transcript_file_nonempty(tx_filename);
+                }
+            }
+            if (!haplo_tx_filenames.empty()) {
+                // we've also provided lifted-over haplotype annotations
+                for (auto& haplo_tx_filename : haplo_tx_filenames) {
+                    tx_filestreams.emplace_back();
+                    init_in(tx_filestreams.back(), haplo_tx_filename);
+                    any_nonempty_tx_file = any_nonempty_tx_file || transcript_file_nonempty(haplo_tx_filename);
+                }
+            }
+            // convert to the format expected by the Transcriptome interface
+            vector<istream*> tx_stream_ptrs;
+            for (auto& strm : tx_filestreams) {
+                tx_stream_ptrs.push_back(&strm);
+            }
             
-            ifstream infile_graph, infile_tx;
-            init_in(infile_graph, graph_filenames[i]);
-            init_in(infile_tx, tx_filenames[j]);
-            
-            // are we using 1 transcript file for multiple graphs?
-            bool broadcasting_txs = (graph_filenames.size() != tx_filenames.size());
-            
-            unique_ptr<MutablePathDeletableHandleGraph> graph
-                = vg::io::VPKG::load_one<MutablePathDeletableHandleGraph>(infile_graph);
-            
-            vector<string> path_names;
-            if (broadcasting_txs) {
-                // get the path names in case we need to report them later for debug output
-                graph->for_each_path_handle([&](const path_handle_t& path) {
-                    path_names.push_back(graph->get_path_name(path));
+            unique_ptr<MutablePathDeletableHandleGraph> graph;
+            if (have_gbz) {
+                // we've already loaded the graph, but we need to convert it into a mutable form
+                graph = init_mutable_graph();
+                handlealgs::copy_handle_graph(&(gbz->graph), graph.get());
+                gbz->graph.for_each_path_matching({PathSense::GENERIC, PathSense::REFERENCE}, {}, {}, [&](const path_handle_t& path) {
+                    handlegraph::algorithms::copy_path(&(gbz->graph), path, graph.get());
                 });
+                
+                // clear the GBZ from memory
+                gbz.reset();
+            }
+            else {
+                // we need to load the graph (chunk) still
+                ifstream infile_graph;
+                init_in(infile_graph, graph_filenames[i]);
+                graph = vg::io::VPKG::load_one<MutablePathDeletableHandleGraph>(infile_graph);
             }
             
             Transcriptome transcriptome(move(graph));
-            transcriptome.error_on_missing_path = !broadcasting_txs;
             transcriptome.feature_type = IndexingParameters::gff_feature_name;
             transcriptome.transcript_tag = IndexingParameters::gff_transcript_tag;
             
             // load up the transcripts and add edges on the reference path
-            size_t transcripts_added = transcriptome.add_reference_transcripts(vector<istream *>({&infile_tx}), haplotype_index, false, true);
+            size_t transcripts_added = transcriptome.add_reference_transcripts(tx_stream_ptrs, haplotype_index, false, true);
             
-            if (broadcasting_txs && !path_names.empty() && transcripts_added == 0
-                && transcript_file_nonempty(tx_filenames[j])) {
-                cerr << "warning:[IndexRegistry] no matching paths from transcript file " << tx_filenames[j] << " were found in graph chunk containing the following paths:" << endl;
-                for (const string& path_name : path_names) {
-                    cerr << "\t" << path_name << endl;
-                }
+            if (transcripts_added == 0 && any_nonempty_tx_file) {
+                cerr << "warning:[IndexRegistry] No matching paths from transcript file(s) were found in graph chunk containing the following paths:" << endl;
+                transcriptome.graph().for_each_path_handle([&](const path_handle_t& path_handle){
+                    cerr << '\t' << transcriptome.graph().get_path_name(path_handle) << '\n';
+                });
             }
             
-            if (have_gbwt) {
+            if (haplotype_index.get() && haplo_tx_filenames.empty()) {
+                // we have haplotypes, but not lifted-over transcripts, so we will try to project them ourselves
                 
                 // go back to the beginning of the transcripts
-                infile_tx.clear();
-                infile_tx.seekg(0);
+                for (auto& infile_tx : tx_filestreams) {
+                    infile_tx.clear();
+                    infile_tx.seekg(0);
+                }
                 
                 // add edges on other haplotypes
-                size_t num_transcripts_projected = transcriptome.add_haplotype_transcripts(vector<istream *>({&infile_tx}), *haplotype_index, false);
+                size_t num_transcripts_projected = transcriptome.add_haplotype_transcripts(tx_stream_ptrs, *haplotype_index, false);
             }
             
             if (making_hsts) {
@@ -2952,7 +3045,7 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
                     
                     // save the haplotype transcript GBWT
                     gbwt_builder.finish();
-                    save_gbwt(gbwt_builder.index, gbwt_name, IndexingParameters::verbosity == IndexingParameters::Debug);
+                    save_gbwt(gbwt_builder.index, hst_gbwt_name, IndexingParameters::verbosity == IndexingParameters::Debug);
                 });
                 if (!success) {
                     IndexingParameters::gbwt_insert_batch_size *= IndexingParameters::gbwt_insert_batch_size_increase_factor;
@@ -2961,7 +3054,6 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
                 }
                 
                 // write transcript origin info table
-                info_table_name = plan->output_filepath(output_tx_table, i, graph_filenames.size());
                 ofstream info_outfile;
                 init_out(info_outfile, info_table_name);
                 transcriptome.write_transcript_info(&info_outfile, *haplotype_index, false);
@@ -2973,34 +3065,70 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
             tx_graph_names[i] = tx_graph_name;
             
             if (making_hsts) {
-                gbwt_chunk_names[i] = gbwt_name;
+                hst_gbwt_chunk_names[i] = hst_gbwt_name;
                 all_outputs[2][i] = info_table_name;
             }
         };
         
         // we'll hold the gbwt in memory, so take it out of our memory budget
         int64_t target_memory_usage = plan->target_memory_usage();
-        if (making_hsts) {
+        if (have_gbwt) {
             target_memory_usage = max<int64_t>(0, target_memory_usage - get_file_size(gbwt_filename));
         }
         
         vector<pair<int64_t, int64_t>> approx_job_requirements;
-        for (int64_t i = 0; i < graph_filenames.size(); ++i) {
-            // FIXME: this should also include the approximate memory of the haplotype transcript
-            approx_job_requirements.emplace_back(get_file_size(graph_filenames[i]),
-                                                 approx_graph_load_memory(graph_filenames[i]));
+        if (!graph_filenames.empty()) {
+            for (int64_t i = 0; i < graph_filenames.size(); ++i) {
+                // FIXME: this should also include the approximate memory of the haplotype transcript
+                approx_job_requirements.emplace_back(get_file_size(graph_filenames[i]),
+                                                     approx_graph_load_memory(graph_filenames[i]));
+            }
+        }
+        else {
+            // there's only one job, so we can be lax on this estimate
+            assert(tx_graph_names.size() == 1);
+            approx_job_requirements.emplace_back(1, 1);
         }
         
         JobSchedule schedule(approx_job_requirements, haplo_tx_job);
         schedule.execute(target_memory_usage);
         
-        if (making_hsts) {
-            // merge the GBWT chunks
-            all_outputs[0].push_back(merge_gbwts(gbwt_chunk_names, plan, output_haplo_tx));
+        // finish by (maybe) merging the HST GBWT chunks
+        if (!hst_gbwt_chunk_names.empty()) {
+            if (hst_gbwt_chunk_names.size() == 1) {
+                // we would have made this in the intended location anyway
+                all_outputs[0].push_back(hst_gbwt_chunk_names.front());
+            }
+            else {
+                // merge the GBWT chunks
+                all_outputs[0].push_back(merge_gbwts(hst_gbwt_chunk_names, plan, output_haplo_tx));
+            }
         }
         
         return all_outputs;
     };
+    
+    auto vg_rna_gbz_graph_only_lifted =
+    registry.register_recipe({"Spliced VG w/ Transcript Paths"},
+                             {"GBZ", "GTF/GFF", "Haplotype GTF/GFF"},
+                             [do_vg_rna](const vector<const IndexFile*>& inputs,
+                                         const IndexingPlan* plan,
+                                         AliasGraph& alias_graph,
+                                         const IndexGroup& constructing) {
+        
+        return do_vg_rna(inputs, plan, alias_graph, constructing, false, true, true, false);
+    });
+    
+    auto vg_rna_gbz_graph_only_projected =
+    registry.register_recipe({"Spliced VG w/ Transcript Paths"},
+                             {"GBZ", "GTF/GFF"},
+                             [do_vg_rna](const vector<const IndexFile*>& inputs,
+                                         const IndexingPlan* plan,
+                                         AliasGraph& alias_graph,
+                                         const IndexGroup& constructing) {
+        
+        return do_vg_rna(inputs, plan, alias_graph, constructing, false, true, false, false);
+    });
     
     auto vg_rna_graph_only_projected =
     registry.register_recipe({"Spliced VG w/ Transcript Paths"},
@@ -3010,7 +3138,7 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
                                          AliasGraph& alias_graph,
                                          const IndexGroup& constructing) {
         
-        return do_vg_rna(inputs, plan, alias_graph, constructing, false);
+        return do_vg_rna(inputs, plan, alias_graph, constructing, true, false, false, false);
     });
     
     auto vg_rna_graph_only =
@@ -3021,7 +3149,29 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
                                          AliasGraph& alias_graph,
                                          const IndexGroup& constructing) {
    
-        return do_vg_rna(inputs, plan, alias_graph, constructing, false);
+        return do_vg_rna(inputs, plan, alias_graph, constructing, false, false, false, false);
+    });
+    
+    auto vg_rna_gbz_full_lifted =
+    registry.register_recipe({"Haplotype-Transcript GBWT", "Spliced VG w/ Transcript Paths", "Unjoined Transcript Origin Table"},
+                             {"GBZ", "GTF/GFF", "Haplotype GTF/GFF"},
+                             [do_vg_rna](const vector<const IndexFile*>& inputs,
+                                         const IndexingPlan* plan,
+                                         AliasGraph& alias_graph,
+                                         const IndexGroup& constructing) {
+        
+        return do_vg_rna(inputs, plan, alias_graph, constructing, false, true, true, true);
+    });
+    
+    auto vg_rna_gbz_full_projected =
+    registry.register_recipe({"Haplotype-Transcript GBWT", "Spliced VG w/ Transcript Paths", "Unjoined Transcript Origin Table"},
+                             {"GBZ", "GTF/GFF"},
+                             [do_vg_rna](const vector<const IndexFile*>& inputs,
+                                         const IndexingPlan* plan,
+                                         AliasGraph& alias_graph,
+                                         const IndexGroup& constructing) {
+        
+        return do_vg_rna(inputs, plan, alias_graph, constructing, false, true, false, true);
     });
     
     auto vg_rna_full =
@@ -3032,12 +3182,14 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
                                          AliasGraph& alias_graph,
                                          const IndexGroup& constructing) {
         
-        return do_vg_rna(inputs, plan, alias_graph, constructing, true);
+        return do_vg_rna(inputs, plan, alias_graph, constructing, true, false, false, true);
     });
     
     // if both the full and graph-only are required, only do the full
     registry.register_generalization(vg_rna_full, vg_rna_graph_only);
     registry.register_generalization(vg_rna_full, vg_rna_graph_only_projected);
+    registry.register_generalization(vg_rna_gbz_full_lifted, vg_rna_gbz_graph_only_lifted);
+    registry.register_generalization(vg_rna_gbz_full_projected, vg_rna_gbz_graph_only_projected);
     
     ////////////////////////////////////
     // Info Table Recipes
@@ -3625,7 +3777,7 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
     // GBZ Recipes
     ////////////////////////////////////
     
-    registry.register_recipe({"Giraffe GBZ"}, {"Reference GFA w/ Haplotypes"},
+    registry.register_recipe({"GBZ"}, {"Reference GFA w/ Haplotypes"},
                              [](const vector<const IndexFile*>& inputs,
                                 const IndexingPlan* plan,
                                 AliasGraph& alias_graph,
@@ -3677,6 +3829,15 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
         
         output_names.push_back(output_name);
         return all_outputs;
+    });
+    
+    registry.register_recipe({"Giraffe GBZ"}, {"GBZ"},
+                             [](const vector<const IndexFile*>& inputs,
+                                const IndexingPlan* plan,
+                                AliasGraph& alias_graph,
+                                const IndexGroup& constructing) {
+        alias_graph.register_alias(*constructing.begin(), inputs[0]);
+        return vector<vector<string>>(1, inputs.front()->get_filenames());
     });
 
     registry.register_recipe({"Giraffe GBZ"}, {"GBWTGraph", "Giraffe GBWT"},
@@ -4929,6 +5090,22 @@ IndexingPlan IndexRegistry::make_plan(const IndexGroup& end_products) const {
     sort(plan.steps.begin(), plan.steps.end(), [&](const RecipeName& a, const RecipeName& b) {
         return dep_order_of_identifier[a.first] < dep_order_of_identifier[b.first];
     });
+    
+    // check that all of the inputs have been used
+    for (const auto& index_name : completed_indexes()) {
+        bool found = false;
+        for (const auto& recipe_name : plan.steps) {
+            const auto& recipe = get_recipe(recipe_name);
+            if (recipe.input_group().count(index_name)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            cerr << "warning:[IndexRegistry] Indexing plan did not use provided input " << index_name << "." << endl;
+            
+        }
+    }
     
 #ifdef debug_index_registry
     cerr << "plan before applying generalizations:" << endl;
