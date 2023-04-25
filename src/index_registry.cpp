@@ -2796,10 +2796,15 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
     auto do_vg_rna = [merge_gbwts](const vector<const IndexFile*>& inputs,
                                    const IndexingPlan* plan,
                                    AliasGraph& alias_graph,
-                                   const IndexGroup& constructing) {
+                                   const IndexGroup& constructing,
+                                   bool making_hsts) {
     
-        assert(constructing.size() == 3 || constructing.size() == 1);
-        bool making_hsts = constructing.size() == 3;
+        assert(constructing.size() == 1 || constructing.size() == 3);
+        assert(inputs.size() == 2 || inputs.size() == 3);
+        bool have_gbwt = (inputs.size() == 3);
+        if (making_hsts) {
+            assert(have_gbwt);
+        }
         
         if (IndexingParameters::verbosity != IndexingParameters::None) {
             if (making_hsts) {
@@ -2843,7 +2848,7 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
         string gbwt_filename;
         unique_ptr<gbwt::GBWT> haplotype_index;
         vector<string> gbwt_chunk_names;
-        if (making_hsts) {
+        if (have_gbwt) {
             tx_filenames = inputs[0]->get_filenames();
             auto gbwt_filenames = inputs[1]->get_filenames();
             graph_filenames = inputs[2]->get_filenames();
@@ -2856,10 +2861,12 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
             // TODO: i can't find where in the building code you actually ensure this...
             assert(haplotype_index->bidirectional());
             
-            // the HST tables
-            all_outputs[2].resize(graph_filenames.size());
-            
-            gbwt_chunk_names.resize(graph_filenames.size());
+            if (making_hsts) {
+                // the HST tables
+                all_outputs[2].resize(graph_filenames.size());
+                
+                gbwt_chunk_names.resize(graph_filenames.size());
+            }
         }
         else {
             tx_filenames = inputs[0]->get_filenames();
@@ -2922,7 +2929,7 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
                 }
             }
             
-            if (making_hsts) {
+            if (have_gbwt) {
                 
                 // go back to the beginning of the transcripts
                 infile_tx.clear();
@@ -2930,6 +2937,9 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
                 
                 // add edges on other haplotypes
                 size_t num_transcripts_projected = transcriptome.add_haplotype_transcripts(vector<istream *>({&infile_tx}), *haplotype_index, false);
+            }
+            
+            if (making_hsts) {
                 
                 // init the haplotype transcript GBWT
                 size_t node_width = gbwt::bit_length(gbwt::Node::encode(transcriptome.graph().max_node_id(), true));
@@ -2992,15 +3002,26 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
         return all_outputs;
     };
     
+    auto vg_rna_graph_only_projected =
+    registry.register_recipe({"Spliced VG w/ Transcript Paths"},
+                             {"Chunked GTF/GFF", "Spliced GBWT", "Spliced VG"},
+                             [do_vg_rna](const vector<const IndexFile*>& inputs,
+                                         const IndexingPlan* plan,
+                                         AliasGraph& alias_graph,
+                                         const IndexGroup& constructing) {
+        
+        return do_vg_rna(inputs, plan, alias_graph, constructing, false);
+    });
+    
     auto vg_rna_graph_only =
     registry.register_recipe({"Spliced VG w/ Transcript Paths"},
                              {"Chunked GTF/GFF", "Spliced VG"},
                              [do_vg_rna](const vector<const IndexFile*>& inputs,
-                                    const IndexingPlan* plan,
+                                         const IndexingPlan* plan,
                                          AliasGraph& alias_graph,
                                          const IndexGroup& constructing) {
    
-        return do_vg_rna(inputs, plan, alias_graph, constructing);
+        return do_vg_rna(inputs, plan, alias_graph, constructing, false);
     });
     
     auto vg_rna_full =
@@ -3011,11 +3032,12 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
                                          AliasGraph& alias_graph,
                                          const IndexGroup& constructing) {
         
-        return do_vg_rna(inputs, plan, alias_graph, constructing);
+        return do_vg_rna(inputs, plan, alias_graph, constructing, true);
     });
     
     // if both the full and graph-only are required, only do the full
     registry.register_generalization(vg_rna_full, vg_rna_graph_only);
+    registry.register_generalization(vg_rna_full, vg_rna_graph_only_projected);
     
     ////////////////////////////////////
     // Info Table Recipes
@@ -3609,7 +3631,7 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
                                 AliasGraph& alias_graph,
                                 const IndexGroup& constructing) {
         if (IndexingParameters::verbosity != IndexingParameters::None) {
-            cerr << "[IndexRegistry]: Combining Giraffe GBWT and GBWTGraph into GBZ." << endl;
+            cerr << "[IndexRegistry]: Making Giraffe GBZ from a GFA." << endl;
         }
         
         assert(inputs.size() == 1);
@@ -3632,7 +3654,7 @@ IndexRegistry VGIndexes::get_vg_index_registry() {
         params.batch_size = IndexingParameters::gbwt_insert_batch_size;
         params.sample_interval = IndexingParameters::gbwt_sampling_interval;
         params.max_node_length = IndexingParameters::max_node_size;
-        params.show_progress = IndexingParameters::verbosity == IndexingParameters::Debug;
+        params.show_progress = (IndexingParameters::verbosity == IndexingParameters::Debug);
         
         bool success = execute_in_fork([&]() {
             
