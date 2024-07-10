@@ -15,6 +15,7 @@
 
 #include <vg/io/vpkg.hpp>
 #include "../algorithms/component.hpp"
+#include "../algorithms/pad_band.hpp"
 #include "../multipath_mapper.hpp"
 #include "../mem_accelerator.hpp"
 #include "../surjector.hpp"
@@ -1849,7 +1850,7 @@ int main_mpmap(int argc, char** argv) {
         surjector->adjust_alignments_for_base_quality = qual_adjusted;
         if (transcriptomic) {
             // FIXME: replicating the behavior in surject_main
-            surjector->max_subgraph_bases = 16 * 1024 * 1024;
+            surjector->max_subgraph_bases_per_read_base = Surjector::SPLICED_DEFAULT_SUBGRAPH_LIMIT;
         }
         
         if (!ref_paths_name.empty()) {
@@ -1900,8 +1901,7 @@ int main_mpmap(int argc, char** argv) {
     }
     multipath_mapper.adjust_alignments_for_base_quality = qual_adjusted;
     multipath_mapper.strip_bonuses = strip_full_length_bonus;
-    multipath_mapper.band_padding_multiplier = band_padding_multiplier;
-    multipath_mapper.init_band_padding_memo();
+    multipath_mapper.choose_band_padding = vg::algorithms::pad_band_random_walk(band_padding_multiplier);
     
     // set mem finding parameters
     multipath_mapper.hit_max = hit_max;
