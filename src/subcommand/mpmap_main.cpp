@@ -2419,7 +2419,6 @@ int main_mpmap(int argc, char** argv) {
         
         if (!no_output) {
             if (!hts_output) {
-<<<<<<< HEAD
                 emitter->emit_pairs(alignment_1.name(), alignment_2.name(), std::move(output_mp_aln_pairs));
                 // note: supplementaries are only generated in the HTS output branch, otherwise we need to preserve interleaving
             }
@@ -2436,12 +2435,6 @@ int main_mpmap(int argc, char** argv) {
                 }
                 
                 emitter->emit_pairs(alignment_1.name(), alignment_2.name(), std::move(output_mp_aln_pairs),
-=======
-                emitter->emit_pairs(alignment_1.name(), alignment_2.name(), std::move(mp_aln_pairs));
-            }
-            else {
-                emitter->emit_pairs(alignment_1.name(), alignment_2.name(), std::move(mp_aln_pairs),
->>>>>>> upstream/master
                                     &path_positions, &tlen_limits);
                 
                 if (!supplementary1.empty() || !supplementary2.empty()) {
