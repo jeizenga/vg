@@ -6,7 +6,7 @@ BASH_TAP_ROOT=../deps/bash-tap
 PATH=../bin:$PATH # for vg
 
 
-plan tests 56
+plan tests 60
 
 vg construct -r small/x.fa >j.vg
 vg index -x j.xg j.vg
@@ -219,3 +219,15 @@ rm x.vg x.pathdup.vg x.xg x.gcsa x.gcsa.lcp x.gam mapped.gam mapped.gamp tiny.vg
 
 is "$(vg surject -p CHM13#0#chr8 -x surject/opposite_strands.gfa --prune-low-cplx --sam-output --gaf-input surject/opposite_strands.gaf | grep -v "^@" | cut -f3-12 | sort | uniq | wc -l)" 1 "vg surject low compelxity pruning gets the same alignment regardless of read orientation"
 
+vg autoindex -p d -w map -g graphs/long_deletion.gfa
+printf "@read\nGAGAGAGAGAGAGAGA\n+\nHHHHHHHHHHHHHHHH\n" > d.fq
+vg map -d d -f d.fq > d.gam
+vg surject -b -x d.xg d.gam > d.bam
+is "$(samtools view -f 2048 d.bam | wc -l)" "1" "Supplementary alignments can be produced"
+is "$(samtools view -F 2048 d.bam | grep "SA:Z:" | wc -l)" "1" "Primary alignments get the SA tag for supplementaries"
+vg view -ak d.gam > d.gamp
+vg surject -b -x d.xg -m d.gamp > d2.bam
+is "$(samtools view -f 2048 d2.bam | wc -l)" "1" "Supplementary alignments can be produced with GAMP input"
+is "$(samtools view -F 2048 d2.bam | grep "SA:Z:" | wc -l)" "1" "Primary alignments get the SA tag for supplementaries with GAMP input"
+
+rm d.xg d.gcsa d.gcsa.lcp d.fq d.gam d.bam d2.bam

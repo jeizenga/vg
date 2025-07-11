@@ -2252,11 +2252,22 @@ int main_mpmap(int argc, char** argv) {
         if (hts_output) {
             // we need to surject and compute path positions
             path_positions.resize(mp_alns.size());
-            for (size_t i = 0; i < mp_alns.size(); ++i) {
-                auto& path_pos = path_positions[i];
-                mp_alns[i] = surjector->surject(mp_alns[i], surjection_paths,
-                                                get<0>(path_pos), get<2>(path_pos), get<1>(path_pos),
-                                                true, transcriptomic);
+            for (size_t i = 0, n = mp_alns.size(); i < n; ++i) {
+                
+                vector<tuple<string, int64_t, bool>> suppl_positions;
+                auto mp_aln_suppls = surjector->surject(mp_alns[i], surjection_paths, suppl_positions,
+                                                        true, transcriptomic);
+                assert(mp_aln_suppls.size() != 0);
+                
+                mp_alns[i] = std::move(mp_aln_suppls.front());
+                get<0>(path_positions[i]) = std::move(get<0>(suppl_positions.front()));
+                get<1>(path_positions[i]) = get<2>(suppl_positions.front());
+                get<2>(path_positions[i]) = get<1>(suppl_positions.front());
+                for (size_t j = 1; j < mp_aln_suppls.size(); ++j) {
+                    mp_alns.emplace_back(std::move(mp_aln_suppls[j]));
+                    path_positions.emplace_back(std::move(get<0>(suppl_positions[j])),
+                                                get<2>(suppl_positions[j]), get<1>(suppl_positions[j]));
+                }
             }
         }
         
@@ -2328,33 +2339,11 @@ int main_mpmap(int argc, char** argv) {
         vector<pair<multipath_alignment_t, multipath_alignment_t>> mp_aln_pairs;
         bool proper_paired = multipath_mapper.multipath_map_paired(alignment_1, alignment_2, mp_aln_pairs, ambiguous_pair_buffer);
         
-        
         if (!same_strand) {
             for (auto& mp_aln_pair : mp_aln_pairs) {
                 rev_comp_multipath_alignment_in_place(&mp_aln_pair.second, [&](vg::id_t node_id) {
                     return path_position_handle_graph->get_length(path_position_handle_graph->get_handle(node_id));
                 });
-            }
-        }
-        
-        vector<pair<tuple<string, bool, int64_t>, tuple<string, bool, int64_t>>> path_positions;
-        vector<int64_t> tlen_limits;
-        if (hts_output) {
-            // we need to surject and compute path positions
-            path_positions.resize(mp_aln_pairs.size());
-            // hackily either give no limit or an unattainable limit to communicate pairedness
-            tlen_limits.resize(mp_aln_pairs.size(),
-                               proper_paired ? numeric_limits<int32_t>::max() : -1);
-            
-            for (size_t i = 0; i < mp_aln_pairs.size(); ++i) {
-                auto& path_pos_1 = path_positions[i].first;
-                auto& path_pos_2 = path_positions[i].second;
-                mp_aln_pairs[i].first = surjector->surject(mp_aln_pairs[i].first, surjection_paths,
-                                                           get<0>(path_pos_1), get<2>(path_pos_1), get<1>(path_pos_1),
-                                                           true, transcriptomic);
-                mp_aln_pairs[i].second = surjector->surject(mp_aln_pairs[i].second, surjection_paths,
-                                                            get<0>(path_pos_2), get<2>(path_pos_2), get<1>(path_pos_2),
-                                                            true, transcriptomic);
             }
         }
         
@@ -2365,13 +2354,102 @@ int main_mpmap(int argc, char** argv) {
             }
         }
         
+        // do surjection if necessary
+        vector<pair<multipath_alignment_t, multipath_alignment_t>> output_mp_aln_pairs;
+        vector<pair<tuple<string, bool, int64_t>, tuple<string, bool, int64_t>>> path_positions;
+        vector<int64_t> tlen_limits;
+        vector<multipath_alignment_t> supplementary1, supplementary2;
+        vector<tuple<string, bool, int64_t>> suppl_positions1, suppl_positions2;
+        if (hts_output) {
+            // we need to surject and compute path positions
+            path_positions.resize(mp_aln_pairs.size());
+            // hackily either give no limit or an unattainable limit to communicate pairedness
+            
+            for (size_t i = 0; i < mp_aln_pairs.size(); ++i) {
+                vector<tuple<string, int64_t, bool>> positions1, positions2;
+                auto surjections1 = surjector->surject(mp_aln_pairs[i].first, surjection_paths, positions1, true, transcriptomic);
+                auto surjections2 = surjector->surject(mp_aln_pairs[i].second, surjection_paths, positions2, true, transcriptomic);
+                // find the non-supplementary primaries
+                size_t non_suppl1 = -1, non_suppl2 = -1;
+                for (size_t j = 0; j < surjections1.size(); ++j) {
+                    if (!is_supplementary(surjections1[j])) {
+                        non_suppl1 = j;
+                        break;
+                    }
+                }
+                for (size_t j = 0; j < surjections2.size(); ++j) {
+                    if (!is_supplementary(surjections2[j])) {
+                        non_suppl2 = j;
+                        break;
+                    }
+                }
+                if (non_suppl1 != -1 && non_suppl2 != -1) {
+                    // output primaries
+                    output_mp_aln_pairs.emplace_back(std::move(surjections1[non_suppl1]), std::move(surjections2[non_suppl2]));
+                    path_positions.emplace_back(make_tuple(std::move(get<0>(positions1[non_suppl1])), get<2>(positions1[non_suppl1]), get<1>(positions1[non_suppl1])),
+                                                make_tuple(std::move(get<0>(positions2[non_suppl2])), get<2>(positions2[non_suppl2]), get<1>(positions2[non_suppl2])));
+                }
+                else {
+                    // if we can't output primaries together as a pair, make sure both are output as unpaired
+                    non_suppl1 = non_suppl2 = -1;
+                }
+                
+                for (size_t j = 0; j < surjections1.size(); ++j) {
+                    if (j == non_suppl1) {
+                        continue;
+                    }
+                    supplementary1.emplace_back(std::move(surjections1[j]));
+                    suppl_positions1.emplace_back(std::move(get<0>(positions1[j])), get<2>(positions1[j]), get<1>(positions1[j]));
+                }
+                for (size_t j = 0; j < surjections2.size(); ++j) {
+                    if (j == non_suppl2) {
+                        continue;
+                    }
+                    supplementary2.emplace_back(std::move(surjections2[j]));
+                    suppl_positions2.emplace_back(std::move(get<0>(positions2[j])), get<2>(positions2[j]), get<1>(positions2[j]));
+                }
+            }
+        }
+        else {
+            output_mp_aln_pairs = std::move(mp_aln_pairs);
+        }
+        
+        tlen_limits.resize(output_mp_aln_pairs.size(),
+                           proper_paired ? numeric_limits<int32_t>::max() : -1);
+        
         if (!no_output) {
             if (!hts_output) {
+<<<<<<< HEAD
+                emitter->emit_pairs(alignment_1.name(), alignment_2.name(), std::move(output_mp_aln_pairs));
+                // note: supplementaries are only generated in the HTS output branch, otherwise we need to preserve interleaving
+            }
+            else {
+                bool read1_mapped = (!output_mp_aln_pairs.empty() || !supplementary1.empty());
+                bool read2_mapped = (!output_mp_aln_pairs.empty() || !supplementary2.empty());
+                bool read1_rev = false, read2_rev = false;
+                // TODO: should I get the rev value from the non-supplementary?
+                if (read1_mapped) {
+                    read1_rev = !output_mp_aln_pairs.empty() ? get<1>(path_positions.front().first) : get<1>(suppl_positions1.front());
+                }
+                if (read2_mapped) {
+                    read2_rev = !output_mp_aln_pairs.empty() ? get<1>(path_positions.front().second) : get<1>(suppl_positions2.front());
+                }
+                
+                emitter->emit_pairs(alignment_1.name(), alignment_2.name(), std::move(output_mp_aln_pairs),
+=======
                 emitter->emit_pairs(alignment_1.name(), alignment_2.name(), std::move(mp_aln_pairs));
             }
             else {
                 emitter->emit_pairs(alignment_1.name(), alignment_2.name(), std::move(mp_aln_pairs),
+>>>>>>> upstream/master
                                     &path_positions, &tlen_limits);
+                
+                if (!supplementary1.empty() || !supplementary2.empty()) {
+                    emitter->emit_paired_independent(alignment_1.name(), alignment_2.name(),
+                                                     std::move(supplementary1), std::move(supplementary2),
+                                                     &suppl_positions1, &suppl_positions2,
+                                                     read1_mapped, read2_mapped, read1_rev, read2_rev);
+                }
             }
         }
         
@@ -2427,32 +2505,44 @@ int main_mpmap(int argc, char** argv) {
                 convert_Ts_to_Us(mp_aln);
             }
         }
-            
-        // keep an equal number to protect interleaving
-        mp_alns_1.resize(min(mp_alns_1.size(), mp_alns_2.size()));
-        mp_alns_2.resize(min(mp_alns_1.size(), mp_alns_2.size()));
         
-        vector<pair<tuple<string, bool, int64_t>, tuple<string, bool, int64_t>>> path_positions;
-        vector<int64_t> tlen_limits;
         if (hts_output) {
             // we need to surject and compute path positions
-            path_positions.resize(mp_alns_1.size());
-            // hackily give unattainable limit to indicate no proper pairing
-            tlen_limits.resize(mp_alns_1.size(), -1);
             
+            vector<tuple<string, bool, int64_t>> path_positions_1, path_positions_2;
+            vector<multipath_alignment_t> output_mp_alns_1, output_mp_alns_2;
             for (size_t i = 0; i < mp_alns_1.size(); ++i) {
-                auto& path_pos_1 = path_positions[i].first;
-                auto& path_pos_2 = path_positions[i].second;
-                mp_alns_1[i] = surjector->surject(mp_alns_1[i], surjection_paths,
-                                                  get<0>(path_pos_1), get<2>(path_pos_1), get<1>(path_pos_1),
-                                                  true, transcriptomic);
-                mp_alns_2[i] = surjector->surject(mp_alns_2[i], surjection_paths,
-                                                  get<0>(path_pos_2), get<2>(path_pos_2), get<1>(path_pos_2),
-                                                  true, transcriptomic);
+                vector<tuple<string, int64_t, bool>> positions;
+                auto surjected = surjector->surject(mp_alns_1[i], surjection_paths, positions, true, transcriptomic);
+                for (size_t j = 0; j < surjected.size(); ++j) {
+                    output_mp_alns_1.emplace_back(std::move(surjected[j]));
+                    path_positions_1.emplace_back(std::move(get<0>(positions[j])), get<2>(positions[j]), get<1>(positions[j]));
+                }
+            }
+            for (size_t i = 0; i < mp_alns_2.size(); ++i) {
+                vector<tuple<string, int64_t, bool>> positions;
+                auto surjected = surjector->surject(mp_alns_2[i], surjection_paths, positions, true, transcriptomic);
+                for (size_t j = 0; j < surjected.size(); ++j) {
+                    output_mp_alns_2.emplace_back(std::move(surjected[j]));
+                    path_positions_2.emplace_back(std::move(get<0>(positions[j])), get<2>(positions[j]), get<1>(positions[j]));
+                }
+            }
+            
+            if (!no_output) {
+                // TODO: should I try to get the rev value from the non-supplementary?
+                emitter->emit_paired_independent(alignment_1.name(), alignment_2.name(),
+                                                 std::move(output_mp_alns_1), std::move(output_mp_alns_2),
+                                                 &path_positions_1, &path_positions_2,
+                                                 !output_mp_alns_1.empty(), !output_mp_alns_2.empty(),
+                                                 !path_positions_1.empty() ? get<1>(path_positions_1.front()) : false,
+                                                 !path_positions_2.empty() ? get<1>(path_positions_2.front()) : false);
             }
         }
-        
-        if (!no_output) {
+        else {
+            // keep an equal number to protect interleaving
+            mp_alns_1.resize(min(mp_alns_1.size(), mp_alns_2.size()));
+            mp_alns_2.resize(min(mp_alns_1.size(), mp_alns_2.size()));
+            
             // reorganize into pairs
             vector<pair<multipath_alignment_t, multipath_alignment_t>> mp_aln_pairs;
             mp_aln_pairs.reserve(mp_alns_1.size());
@@ -2460,12 +2550,9 @@ int main_mpmap(int argc, char** argv) {
                 mp_aln_pairs.emplace_back(std::move(mp_alns_1[i]), std::move(mp_alns_2[i]));
             }
             
-            if (!hts_output) {
+            if (!no_output) {
                 emitter->emit_pairs(alignment_1.name(), alignment_2.name(), std::move(mp_aln_pairs));
-            }
-            else {
-                emitter->emit_pairs(alignment_1.name(), alignment_2.name(), std::move(mp_aln_pairs),
-                                    &path_positions, &tlen_limits);
+
             }
         }
         

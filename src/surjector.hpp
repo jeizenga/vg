@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <queue>
 
 #include "aligner.hpp"
 #include "handle.hpp"
@@ -44,7 +45,7 @@ using namespace std;
         virtual void set_alignment_scores(const int8_t* score_matrix, int8_t gap_open, int8_t gap_extend, int8_t full_length_bonus);
         
         /// Extract the portions of an alignment that are on a chosen set of paths and try to
-        /// align realign the portions that are off of the chosen paths to the intervening
+        /// align realign the portions thaet are off of the chosen paths to the intervening
         /// path segments to obtain an alignment that is fully restricted to the paths.
         ///
         /// Also returns the path name, position, and strand of the new alignment.
@@ -54,13 +55,11 @@ using namespace std;
         ///
         /// Also optionally leaves deletions against the reference path in the final alignment
         /// (useful for splicing).
-        Alignment surject(const Alignment& source,
-                          const unordered_set<path_handle_t>& paths,
-                          string& path_name_out,
-                          int64_t& path_pos_out,
-                          bool& path_rev_out,
-                          bool allow_negative_scores = false,
-                          bool preserve_deletions = false) const;
+        vector<Alignment> surject(const Alignment& source,
+                                  const unordered_set<path_handle_t>& paths,
+                                  vector<tuple<string, int64_t, bool>>& positions_out,
+                                  bool allow_negative_scores = false,
+                                  bool preserve_deletions = false) const;
         
         /// Same as above, but include alignments to all paths instead of only the optimal one
         vector<Alignment> multi_surject(const Alignment& source,
@@ -83,10 +82,10 @@ using namespace std;
         ///
         /// Also optionally leaves deletions against the reference path in the final
         /// alignment (useful for splicing).
-        Alignment surject(const Alignment& source,
-                          const unordered_set<path_handle_t>& paths,
-                          bool allow_negative_scores = false,
-                          bool preserve_deletions = false) const;
+        vector<Alignment> surject(const Alignment& source,
+                                  const unordered_set<path_handle_t>& paths,
+                                  bool allow_negative_scores = false,
+                                  bool preserve_deletions = false) const;
         
         /// Same as above, but include alignments to all paths instead of only the optimal one
         vector<Alignment> multi_surject(const Alignment& source,
@@ -98,12 +97,11 @@ using namespace std;
         /// preserved as splices. The output consists of a multipath alignment with
         /// a single path, separated by splices (either from large deletions or from
         /// connections)
-        multipath_alignment_t surject(const multipath_alignment_t& source,
-                                      const unordered_set<path_handle_t>& paths,
-                                      string& path_name_out, int64_t& path_pos_out,
-                                      bool& path_rev_out,
-                                      bool allow_negative_scores = false,
-                                      bool preserve_deletions = false) const;
+        vector<multipath_alignment_t> surject(const multipath_alignment_t& source,
+                                              const unordered_set<path_handle_t>& paths,
+                                              vector<tuple<string, int64_t, bool>>& positions_out,
+                                              bool allow_negative_scores = false,
+                                              bool preserve_deletions = false) const;
         
         /// Same as above, but include alignments to all paths instead of only the optimal one
         vector<multipath_alignment_t> multi_surject(const multipath_alignment_t& source,
@@ -145,7 +143,8 @@ using namespace std;
         static constexpr double DEFAULT_SUBGRAPH_LIMIT = 100 * 1024 / 125.0;
         /// How big of a graph (in graph bases per read base) should we ever try to align against for realigning surjection?
         double max_subgraph_bases_per_read_base = DEFAULT_SUBGRAPH_LIMIT;
-       
+        /// Don't refuse to align  (graph size) * (read size) is at least this size (overrides max_subgraph_bases_per_read_base)
+        int64_t min_absolute_align_size_to_refuse = 1024;
         
         /// in spliced surject, downsample if the base-wise average coverage by chunks is this high
         int64_t min_fold_coverage_for_downsample = 8;
@@ -181,6 +180,17 @@ using namespace std;
         /// Excessive anchors will be pruned away.
         size_t max_anchors = std::numeric_limits<size_t>::max();
         
+        /// Should we report supplementary alignments?
+        bool report_supplementary = true;
+        /// What fraction of a read length separation should we expect before separating into supplementaries?
+        double read_length_prop_disjoint_gap = 1.0;
+        /// The maximum gap size before we always separate into supplementary alignments
+        size_t max_disjoint_gap = 10000;
+        /// The minimum gap size we should never separate into supplementary alignments
+        size_t min_disjoint_gap = 50;
+        /// The max size overlap on the read between supplementaries before we designate them as non-colinear
+        int64_t disjoint_interval_allowable_overlap = 4;
+        
         bool annotate_with_all_path_scores = false;
         bool annotate_with_graph_alignment = false;
         
@@ -195,19 +205,19 @@ using namespace std;
                               vector<tuple<string, int64_t, bool>>& positions_out, bool all_paths,
                               bool allow_negative_scores, bool preserve_deletions) const;
         
-        Alignment
+        vector<pair<Alignment, pair<step_handle_t, step_handle_t>>>
         realigning_surject(const PathPositionHandleGraph* graph, const Alignment& source,
                            const path_handle_t& path_handle, bool rev_strand,
                            const vector<path_chunk_t>& path_chunks,
                            const vector<pair<step_handle_t, step_handle_t>>& ref_chunks,
-                           pair<step_handle_t, step_handle_t>& path_range_out,
                            bool allow_negative_scores,
                            bool preserve_N_alignments = false,
                            bool sinks_are_anchors = false,
                            bool sources_are_anchors = false,
-                           vector<pair<step_handle_t, step_handle_t>>* all_path_ranges_out = nullptr) const;
+                           vector<vector<pair<step_handle_t, step_handle_t>>>* all_path_ranges_out = nullptr,
+                           size_t override_read_length = 0) const;
         
-        multipath_alignment_t
+        vector<pair<multipath_alignment_t, pair<step_handle_t, step_handle_t>>>
         spliced_surject(const PathPositionHandleGraph* path_position_graph,
                         const string& src_sequence, const string& src_quality,
                         const int32_t src_mapping_quality,
@@ -215,7 +225,6 @@ using namespace std;
                         vector<path_chunk_t>& path_chunks,
                         vector<pair<step_handle_t, step_handle_t>>& ref_chunks,
                         vector<tuple<size_t, size_t, int32_t>>& connections,
-                        pair<step_handle_t, step_handle_t>& path_range_out,
                         bool allow_negative_scores, bool deletions_as_splices) const;
         
         ///////////////////////
@@ -252,6 +261,15 @@ using namespace std;
                               const vector<pair<step_handle_t, step_handle_t>>& ref_chunks,
                               bool no_left_expansion, bool no_right_expansion) const;
         
+        /// Compute a set of end-inclusive intervals of path positions that the
+        /// realign sequence could align to, and associate with each one a vector
+        /// indexes into path_chunks to indicate which path chunks it contains.
+        vector<tuple<size_t, size_t, vector<size_t>>>
+        compute_disjoint_path_intervals(const PathPositionHandleGraph* graph, const Alignment& source, path_handle_t path_handle,
+                                        bool rev_strand, const vector<path_chunk_t>& path_chunks,
+                                        const vector<pair<step_handle_t, step_handle_t>>& ref_chunks,
+                                        bool no_left_expansion, bool no_right_expansion, size_t max_gap) const;
+        
         /// use the graph position bounds and the path range bounds to assign a path position to a surjected read
         void set_path_position(const PathPositionHandleGraph* graph, const pos_t& init_surj_pos,
                                const pos_t& final_surj_pos,
@@ -259,7 +277,53 @@ using namespace std;
                                bool rev_strand, string& path_name_out, int64_t& path_pos_out, bool& path_rev_out) const;
         
         template<class AlnType>
-        string path_score_annotations(const unordered_map<pair<path_handle_t, bool>, pair<AlnType, pair<step_handle_t, step_handle_t>>>& surjections) const;
+        string path_score_annotations(const unordered_map<pair<path_handle_t, bool>, vector<pair<AlnType, pair<step_handle_t, step_handle_t>>>>& surjections) const;
+        
+        // helpers to choose one among supplementary alignments to be the primary
+        template<class AlnType>
+        void choose_primary_internal(vector<pair<AlnType, pair<step_handle_t, step_handle_t>>>& surjections,
+                                     const function<void(AlnType&)>& annotate_supplementary) const;
+        void choose_primary(vector<pair<Alignment, pair<step_handle_t, step_handle_t>>>& surjections) const {
+            function<void(Alignment&)> annotate_supplementary = [](Alignment& aln) { set_annotation<bool>(aln, "supplementary", true); };
+            choose_primary_internal(surjections, annotate_supplementary);
+        }
+        void choose_primary(vector<pair<multipath_alignment_t, pair<step_handle_t, step_handle_t>>>& surjections) const {
+            function<void(multipath_alignment_t&)> annotate_supplementary = [](multipath_alignment_t& mp_aln) { mp_aln.set_annotation("supplementary", true); };
+            choose_primary_internal(surjections, annotate_supplementary);
+        }
+
+        // helpers to add the SA tag
+        template<class AlnType>
+        void add_SA_tag_internal(vector<AlnType>& surjected, const vector<tuple<string, int64_t, bool>>& positions,
+                                 const PathPositionHandleGraph& graph, bool spliced, const function<void(AlnType&,const string&)>& update_sa) const;
+        static string update_tag_string_for_SA(const string& tags, const string& sa_val);
+        void add_SA_tag(vector<Alignment>& surjected, const vector<tuple<string, int64_t, bool>>& positions,
+                        const PathPositionHandleGraph& graph, bool spliced) const {
+            function<void(Alignment&,const string&)> update_sa = [](Alignment& aln,const string& val) {
+                string annotation;
+                if (has_annotation(aln, "tags")) {
+                    annotation = std::move(get_annotation<string>(aln, "tags"));
+                }
+                annotation = update_tag_string_for_SA(annotation, val);
+                set_annotation(aln, "tags", annotation);
+            };
+            add_SA_tag_internal(surjected, positions, graph, spliced, update_sa);
+        }
+        void add_SA_tag(vector<multipath_alignment_t>& surjected, const vector<tuple<string, int64_t, bool>>& positions,
+                        const PathPositionHandleGraph& graph, bool spliced) const {
+            function<void(multipath_alignment_t&,const string&)> update_sa = [](multipath_alignment_t& mp_aln,const string& val) {
+                string annotation;
+                if (mp_aln.has_annotation("tags")) {
+                    annotation = *((const string*) mp_aln.get_annotation("tags").second);
+                }
+                annotation = update_tag_string_for_SA(annotation, val);
+                mp_aln.set_annotation("tags", annotation);
+            };
+            add_SA_tag_internal(surjected, positions, graph, spliced, update_sa);
+        }
+        
+        template<class AlnType>
+        int64_t total_overlap(const vector<pair<AlnType, pair<step_handle_t, step_handle_t>>>& surjections) const;
         
         ///////////////////////
         // Support methods for the spliced surject algorithm
@@ -325,17 +389,28 @@ using namespace std;
         
         template<class AlnType>
         static int32_t get_score(const AlnType& aln);
+
+        template<class AlnType>
+        static size_t count_mismatches(const AlnType& surjected);
+
+        template<class AlnType>
+        vector<pair<int, char>> get_cigar(const AlnType& surjected, const tuple<string, int64_t, bool>& position, const PathPositionHandleGraph& graph, bool spliced) const;
         
         /// the graph we're surjecting onto
         const PathPositionHandleGraph* graph = nullptr;
     };
 
     template<class AlnType>
-    string Surjector::path_score_annotations(const unordered_map<pair<path_handle_t, bool>, pair<AlnType, pair<step_handle_t, step_handle_t>>>& surjections) const {
+    string Surjector::path_score_annotations(const unordered_map<pair<path_handle_t, bool>, vector<pair<AlnType, pair<step_handle_t, step_handle_t>>>>& surjections) const {
         
         vector<tuple<int32_t, string, bool>> paths;
-        for (const auto& surjection : surjections) {
-            paths.emplace_back(get_score(surjection.second.first), graph->get_path_name(surjection.first.first), surjection.first.second);
+        for (const auto& path_surjections : surjections) {
+            for (const auto& surjection : path_surjections.second) {
+                if (!is_supplementary(surjection.first)) {
+                    paths.emplace_back(get_score(surjection.first),
+                                       graph->get_path_name(path_surjections.first.first), path_surjections.first.second);
+                }
+            }
         }
         sort(paths.begin(), paths.end(), greater<tuple<int32_t, string, bool>>());
         
@@ -351,6 +426,111 @@ using namespace std;
         }
         
         return sstrm.str();
+    }
+
+    template<class AlnType>
+    void Surjector::choose_primary_internal(vector<pair<AlnType, pair<step_handle_t, step_handle_t>>>& surjections,
+                                            const function<void(AlnType&)>& annotate_supplementary) const {
+        if (surjections.size() > 1) {
+            size_t opt_idx = 0;
+            int32_t opt_score = get_score(surjections.front().first);
+            for (size_t i = 1; i < surjections.size(); ++i) {
+                int32_t score = get_score(surjections[i].first);
+                if (score > opt_score) {
+                    opt_score = score;
+                    opt_idx = i;
+                }
+            }
+            
+            for (size_t i = 0; i < surjections.size(); ++i) {
+                if (i != opt_idx) {
+                    annotate_supplementary(surjections[i].first);
+                }
+            }
+        }
+    }
+
+    template<class AlnType>
+    int64_t Surjector::total_overlap(const vector<pair<AlnType, pair<step_handle_t, step_handle_t>>>& surjections) const {
+        
+        vector<pair<int64_t, int64_t>> intervals(surjections.size());
+        for (size_t i = 0; i < surjections.size(); ++i) {
+            intervals[i] = aligned_interval(surjections[i].first);
+        }
+        sort(intervals.begin(), intervals.end());
+        
+        priority_queue<int64_t, vector<int64_t>, greater<int64_t>> ends;
+        int64_t overlap = 0;
+        int64_t previous = -1;
+        for (size_t i = 0; i < intervals.size(); ++i) {
+            
+            const auto& interval = intervals[i];
+            // add overlaps from constant-depth sub-intervals that end before this interval starts
+            while (!ends.empty() && ends.top() <= interval.first) {
+                overlap += (ends.size() - 1) * (ends.top() - previous);
+                previous = ends.top();
+                ends.pop();
+            }
+            
+            if (!ends.empty()) {
+                // add the constant-depth sub-interval that ends at this interval's beginning
+                overlap += (ends.size() - 1) * (interval.first - previous);
+            }
+            previous = interval.first;
+            // queue up the point at which this interval is subtracted from the depth
+            ends.push(interval.second);
+        }
+        // clear out the queue
+        while (!ends.empty()) {
+            overlap += (ends.size() - 1) * (ends.top() - previous);
+            previous = ends.top();
+            ends.pop();
+        }
+        
+        return overlap;
+    }
+
+    template<class AlnType>
+    void Surjector::add_SA_tag_internal(vector<AlnType>& surjected, const vector<tuple<string, int64_t, bool>>& positions, 
+                                        const PathPositionHandleGraph& graph, bool spliced, const function<void(AlnType&,const string&)>& update_sa) const {
+        size_t primary_idx = -1;
+        for (size_t i = 0; i < surjected.size(); ++i) {
+            if (!is_supplementary(surjected[i])) {
+                primary_idx = i;
+                break;
+            }
+        }
+        if (primary_idx == -1) {
+            // there is no primary to annotate
+            return;
+        }
+        bool first = true;
+        stringstream strm;
+        for (size_t i = 0; i < surjected.size(); ++i) {
+            auto& surj = surjected[i];
+            if (!is_supplementary(surj)) {
+                continue;
+            }
+            if (!first) {
+                strm << ';';
+            }
+            first = false;
+            const auto& pos = positions[i];
+            // note: convert to 1-based
+            strm << get<0>(pos) << ',' << (get<1>(pos) + 1) << ',' << (get<2>(pos) ? '-' : '+') << ',';
+            auto cigar = get_cigar(surj, pos, graph, spliced);
+            if (cigar.empty()) {
+                strm << '*';
+            }
+            else {
+                for (const auto& op : cigar)  {
+                    strm << op.first << op.second;
+                }
+            }
+            strm << ',' << surj.mapping_quality() << ',' << count_mismatches(surj);
+        }
+
+        update_sa(surjected[primary_idx], strm.str());
     }
 }
 
